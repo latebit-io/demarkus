@@ -9,6 +9,9 @@ BIN="${HOME}/.demarkus/bin/demarkus-plugin"
 GATE_SECS=12
 # Absent binary fails open: a not-yet-provisioned session must not block.
 [ -x "${BIN}" ] || { echo "[demarkus] ${BIN} missing (bootstrap not run yet?); allowing the write" >&2; exit 0; }
+# A brand's defaults sit beside its guidance; the base plugins ship none.
+DEMARKUS_BRAND_FILE="$(dirname "$0")/../context/brand.json"
+export DEMARKUS_BRAND_FILE
 
 # Signal a job's process group. A group already gone is the normal case, so
 # only a failure against a live group is logged.

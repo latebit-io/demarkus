@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
 // transcriptWith writes a one-line Claude transcript whose assistant turn
@@ -134,5 +135,85 @@ func TestTaintWarnKeepsOtherWarningsApart(t *testing.T) {
 	}
 	if !strings.Contains(untagged.Reason, "untrusted") || !strings.Contains(untagged.Reason, "metadata.tags") {
 		t.Errorf("reason %q, want both warnings", untagged.Reason)
+	}
+}
+
+// quiet warns the agent like warn; the user is shown the other warnings alone,
+// and the session's one showing is not spent.
+func TestTaintQuiet(t *testing.T) {
+	home := setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	t.Setenv("DEMARKUS_TAINT_STRICTNESS", "quiet")
+	web := transcriptWith(t, "WebFetch", map[string]any{"url": "https://evil.example/p"})
+	for _, post := range []bool{false, true} {
+		in := &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: map[string]any{"url": "/x.md", "body": "# X\n"}, TranscriptPath: web, Post: post, SessionID: "session-a"}
+		d := mustEval(t, in)
+		if d.Decision != "warn" || d.UpdatedInput != nil || !strings.Contains(d.Reason, "untrusted") {
+			t.Fatalf("post %v: quiet = %q (%s), updated %v; want an unstamped warn", post, d.Decision, d.Reason, d.UpdatedInput)
+		}
+		if notice, ok := Report(d, in); !ok || !strings.Contains(notice, "metadata.tags") || strings.Contains(notice, "untrusted") {
+			t.Errorf("post %v: notice = %q, %v; want the tag warning alone", post, notice, ok)
+		}
+	}
+	if got := claims(t, home, shownDir); len(got) != 0 {
+		t.Errorf("shown = %v, want no showing spent", got)
+	}
+	// An unreadable transcript still asks before the call; after it, quietly warns.
+	gone := filepath.Join(t.TempDir(), "gone.jsonl")
+	publish := map[string]any{"url": "/x.md", "body": "# X\n", "metadata": map[string]any{"tags": "a"}}
+	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: gone}); d.Decision != "ask" {
+		t.Errorf("pre phase, unreadable transcript = %q, want ask", d.Decision)
+	}
+	if d := mustEval(t, &Input{ToolName: "mcp__demarkus-memory__mark_publish", ToolInput: publish, TranscriptPath: gone, Post: true}); d.Decision != "warn" || shown(d, "session-a") != "" {
+		t.Errorf("post phase, unreadable transcript = %q, shown %q; want a quiet warn", d.Decision, shown(d, "session-a"))
+	}
+}
+
+// A brand sets the level its users start from: under the env override and
+// the ~/.demarkus file, over the built-in warn.
+func TestTaintBrandDefault(t *testing.T) {
+	home := setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	brand := filepath.Join(t.TempDir(), "brand.json")
+	t.Setenv(config.BrandFileEnv, brand)
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := func() *Input {
+		return &Input{Tool: "mark_publish", Input: map[string]any{"url": "/x.md", "body": "# X\n", "metadata": map[string]any{"tags": "a"}}, Taint: []string{"WebSearch"}}
+	}
+	// A base plugin ships no brand file, and a brand need not set the level.
+	if d := mustEval(t, in()); d.Decision != "warn" {
+		t.Errorf("no brand file = %q, want warn", d.Decision)
+	}
+	write(brand, `{"plugin_name":"acme-brain","store_noun":"soul"}`)
+	if d := mustEval(t, in()); d.Decision != "warn" {
+		t.Errorf("brand without a level = %q, want warn", d.Decision)
+	}
+	for level, want := range map[string]string{"off": "allow", "quiet": "warn", "warn": "warn", "ask": "ask", "strict": "ask"} {
+		write(brand, `{"plugin_name":"acme-brain","taint_strictness":"`+level+`"}`)
+		d := mustEval(t, in())
+		if d.Decision != want || d.quiet != (level == "quiet") {
+			t.Errorf("brand %s = %q, quiet %v; want %s", level, d.Decision, d.quiet, want)
+		}
+	}
+	write(brand, `{"taint_strictness":"off"}`)
+	write(filepath.Join(home, ".demarkus", "plugin.taint-strictness"), "ask\n")
+	if d := mustEval(t, in()); d.Decision != "ask" {
+		t.Errorf("user file over brand = %q, want ask", d.Decision)
+	}
+	t.Setenv("DEMARKUS_TAINT_STRICTNESS", "warn")
+	if d := mustEval(t, in()); d.Decision != "warn" {
+		t.Errorf("env over file and brand = %q, want warn", d.Decision)
+	}
+	// A brand file that does not parse is an error, never a silent default.
+	t.Setenv("DEMARKUS_TAINT_STRICTNESS", "")
+	if err := os.Remove(filepath.Join(home, ".demarkus", "plugin.taint-strictness")); err != nil {
+		t.Fatal(err)
+	}
+	write(brand, `{"taint_strictness":`)
+	if _, err := Evaluate(in()); err == nil || !strings.Contains(err.Error(), "brand.json") {
+		t.Errorf("unparsable brand file: err = %v", err)
 	}
 }

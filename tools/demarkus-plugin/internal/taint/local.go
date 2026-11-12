@@ -18,8 +18,8 @@ var redirection = regexp.MustCompile(`^(?:\d*|&)[<>]`)
 
 // Ways a command sends a loopback curl elsewhere with nothing in its
 // arguments to show it: a proxy variable, a curlrc home, another PATH, a
-// function or alias named curl. Matched anywhere in the command, quoted or not.
-var rerouted = regexp.MustCompile(`\b(?:(?:https?|all|no)_proxy|(?:HTTPS?|ALL|NO)_PROXY|CURL_HOME)\b|\b(?:(?:XDG_CONFIG_)?HOME|PATH)=|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=`)
+// function or alias named curl, a declared name an expansion builds (http_$p).
+var rerouted = regexp.MustCompile(`\b(?:(?:https?|all|no)_proxy|(?:HTTPS?|ALL|NO)_PROXY|CURL_HOME)\b|\b(?:(?:XDG_CONFIG_)?HOME|PATH)=|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=|\b(?:export|declare|typeset|readonly)\b[^;&|\n]*[$` + "`]")
 
 // reroutes also reads the command bare, so a name split by quotes or an
 // escaped newline is found.

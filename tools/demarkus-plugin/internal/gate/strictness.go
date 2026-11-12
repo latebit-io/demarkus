@@ -64,19 +64,26 @@ func governanceStrictness() (Strictness, error) {
 	return strictness("DEMARKUS_GOVERNANCE_STRICTNESS", "plugin.governance-strictness", Warn)
 }
 
-// taintStrictness defaults to warn: a routine gh api or web read must not
-// prompt every write. A warned write carries no tainted stamp: Claude Code
-// rewrites a call only with a prompt. ask restores both, off drops the guard.
-func taintStrictness() (Strictness, error) {
+// taintStrictness: env, the ~/.demarkus file, a brand's default, then warn (a
+// routine gh api or web read must not prompt every write). quiet is warn
+// without the line Claude Code shows the user; off drops the guard.
+func taintStrictness() (s Strictness, quiet bool, err error) {
 	v, err := config.Knob("DEMARKUS_TAINT_STRICTNESS", "plugin.taint-strictness")
-	switch {
-	case err == nil && config.IsOff(v):
-		return Off, nil
-	case strings.TrimSpace(v) == "":
-		return Warn, err
+	if err == nil && v == "" {
+		var b config.Brand
+		b, err = config.HookBrand()
+		v = b.TaintStrictness
+	}
+	switch v = strings.TrimSpace(v); {
+	case err != nil || v == "":
+		return Warn, false, err
+	case config.IsOff(v):
+		return Off, false, nil
+	case v == "quiet":
+		return Warn, true, nil
 	}
 	// A set value that is no level (a typo, "ASK") must not weaken the guard.
-	return validStrictness(v, Ask), err
+	return validStrictness(v, Ask), false, nil
 }
 
 // knowledgeStrictness is the gate's severity on a joined knowledge system:

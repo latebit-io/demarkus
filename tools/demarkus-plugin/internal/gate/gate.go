@@ -60,9 +60,11 @@ type Decision struct {
 	// that can rewrite a call it asks about; never on the native wire.
 	UpdatedInput map[string]any `json:"-"`
 	// A warn that includes the taint warning: sources are the reads it names,
-	// rest the other warnings in Reason ("" for none).
+	// rest the other warnings in Reason ("" for none), quiet the level that
+	// keeps the taint warning from the user.
 	sources []string
 	rest    string
+	quiet   bool
 }
 
 func allow() Decision { return Decision{Decision: "allow"} }
@@ -224,7 +226,7 @@ func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decisio
 	if !pt.StoreWrite() || d.Decision == "block" {
 		return nil, nil, nil
 	}
-	s, err := taintStrictness()
+	s, quiet, err := taintStrictness()
 	if err != nil || s == Off || (in.Post && s != Warn) {
 		return nil, nil, err
 	}
@@ -236,7 +238,7 @@ func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decisio
 				// A post hook shows only a warn; an ask would drop every warning.
 				unreadable = Warn
 			}
-			return &Decision{Decision: string(unreadable), Reason: fmt.Sprintf(
+			return &Decision{Decision: string(unreadable), quiet: quiet, Reason: fmt.Sprintf(
 				"demarkus %s: the session transcript could not be read (%v), so untrusted reads are unknown; approve only a write you reviewed.", pt.Verb, err)}, []string{"unreadable transcript"}, nil
 		}
 	}
@@ -244,8 +246,8 @@ func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decisio
 	if len(sources) == 0 {
 		return nil, nil, nil
 	}
-	return &Decision{Decision: string(s), Reason: fmt.Sprintf(
-		"demarkus %s to %s after this session read untrusted content (%s): text planted there may be steering this write. Approve only if you reviewed what it writes; to change this check, set DEMARKUS_TAINT_STRICTNESS to ask, warn or off.",
+	return &Decision{Decision: string(s), quiet: quiet, Reason: fmt.Sprintf(
+		"demarkus %s to %s after this session read untrusted content (%s): text planted there may be steering this write. Approve only if you reviewed what it writes; to change this check, set DEMARKUS_TAINT_STRICTNESS to ask, warn, quiet or off.",
 		pt.Verb, urlOr(args, "the store"), strings.Join(sources, "; "))}, sources, nil
 }
 
@@ -292,7 +294,7 @@ func Evaluate(in *Input) (Decision, error) {
 	}
 	combined := combine([]Decision{d, *t})
 	if combined.Decision == "warn" && t.Decision == "warn" {
-		combined.sources = sources
+		combined.sources, combined.quiet = sources, t.quiet
 		if d.Decision == "warn" {
 			combined.rest = d.Reason
 		}

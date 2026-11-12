@@ -38,7 +38,7 @@ test("taintOf finds a download only where the shell runs one", () => {
   const mentions = [
     'git commit -m "switch to curl for fetch"', "git commit -m \"$(cat <<'EOF'\ncurl is now the fetcher\nEOF\n)\"",
     "cat <<EOF > get.sh\ncurl https://x\nEOF", "grep -rn curl .", "rg 'wget' src", "echo curl", "echo '$(curl https://x)'",
-    "brew install curl", "sudo apt-get install -y curl wget", "command -v curl", "man wget", "gh pr view 1",
+    "brew install curl", "sudo apt-get install -y curl wget", "command -v curl", "command -pv curl", "command -V wget", "man wget", "gh pr view 1",
     "# curl https://x", "echo ok # $(curl https://x)", "true # x; wget https://x",
     "bash -c 'curl http://localhost'", "echo $(curl -s localhost:8080)",
   ];

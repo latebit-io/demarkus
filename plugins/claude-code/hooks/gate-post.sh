@@ -6,5 +6,8 @@
 set -uo pipefail
 BIN="${HOME}/.demarkus/bin/demarkus-plugin"
 [ -x "${BIN}" ] || exit 0
+# A brand's defaults sit beside its guidance; the base plugins ship none.
+DEMARKUS_BRAND_FILE="$(dirname "$0")/../context/brand.json"
+export DEMARKUS_BRAND_FILE
 # Keep stderr visible (see gate-pre.sh): fail-open diagnostics must not be hidden.
 "${BIN}" gate --format claude-post || exit 0

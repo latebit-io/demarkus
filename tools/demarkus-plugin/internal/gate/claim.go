@@ -47,9 +47,15 @@ func Report(d Decision, in *Input) (notice string, ok bool) {
 
 // shown is the part of a warn a session's user sees. The taint warning
 // repeats on every write after one untrusted read, so it shows once per set
-// of sources; no session id or a failed claim shows it every time.
+// of sources, never at quiet; no session id or a failed claim shows it every time.
 func shown(d Decision, session string) string {
-	if len(d.sources) == 0 || session == "" {
+	if len(d.sources) == 0 {
+		return d.Reason
+	}
+	if d.quiet {
+		return d.rest
+	}
+	if session == "" {
 		return d.Reason
 	}
 	sum := sha256.Sum256([]byte(strings.Join(d.sources, "\n")))

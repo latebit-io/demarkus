@@ -11,6 +11,17 @@ A brand changes the plugin name, its description, every place the prompts name t
 - the `demarkus-plugin` binary, its pinned version in `scripts/bootstrap.sh`, and its download source (the demarkus GitHub releases).
 - the state directory `~/.demarkus` and the `DEMARKUS_*` environment variables.
 
+One gate default can differ: `taint_strictness` sets the level the taint guard (a write after the session read untrusted content: web, browser, `curl` off the machine, `gh api`) starts from for your users, in place of the upstream `warn`.
+
+| Level | Agent | User |
+| --- | --- | --- |
+| `ask` | told, and the write waits | approves each write; an approved publish is labeled `source-trust: tainted` |
+| `warn` | told | Claude Code shows the warning once per session and set of sources |
+| `quiet` | told | shown nothing |
+| `off` | not told | shown nothing; the guard does not run |
+
+It is a default, not a lock: a user's `DEMARKUS_TAINT_STRICTNESS` or `~/.demarkus/plugin.taint-strictness` wins. `quiet` differs from `warn` on Claude Code alone; Cursor shows the user no warn. Set the same level on the memory and the knowledge brand: both hook every write, so the generator refuses sibling brands (linked by `memory_plugin_name` or `knowledge_plugin_name`) whose levels differ. The generated README states a level you set, since `off` removes a guard your users would otherwise have. Needs a `demarkus-plugin` release that reads it; an older binary ignores the field and warns.
+
 The memory MCP server key defaults to `demarkus-memory`, which is what tool names and the `plugin:<name>:demarkus-memory` label show. `mcp_server_key` on a memory brand renames it (`plugin:<name>:memory`, tools `mcp__plugin_<name>_memory__mark_*`, prompts under `/memory/`): the generator rewrites `.mcp.json` (Claude Code) or `mcp.json` (Cursor) and adds `mcp-serve --name <key>`, which records the key under `~/.demarkus` so the destination gate and nudges still recognize the local memory. The key is reserved like `demarkus-memory`: no joined store may use it as a slug. Needs a `demarkus-plugin` release with `mcp-serve --name`; pin `upstream.ref` at a pin bump after that change.
 
 Because the state is shared, a brand replaces the upstream plugin on a machine. Installing both doubles every hook and both fight over one managed server. Tell your users to uninstall `demarkus-memory` and `demarkus-knowledge` before installing the brand.
@@ -64,7 +75,7 @@ One entry per plugin you want generated; delete the entries you do not need. Thi
 }
 ```
 
-Fields: `name` and `output` are unique per entry; `output` must live under `plugins/brands/` of the demarkus checkout; `plugin_name` is lowercase letters, digits, and hyphens, becomes the `/<plugin_name>:` command prefix, and may repeat across harnesses since each harness has its own marketplace; `memory_plugin_name` and `knowledge_plugin_name` name the sibling plugin on the same harness when you brand both surfaces; `store_noun` and `store_noun_plural` replace the word "soul" in the prompts; `mcp_server_key` (memory bases only) renames the MCP server as described above; `author` (`name` required, `url` optional), `homepage` and `repository` replace the manifest's identity fields, which otherwise keep the demarkus values (URLs must be absolute http(s)). Unknown fields are rejected.
+Fields: `name` and `output` are unique per entry; `output` must live under `plugins/brands/` of the demarkus checkout; `plugin_name` is lowercase letters, digits, and hyphens, becomes the `/<plugin_name>:` command prefix, and may repeat across harnesses since each harness has its own marketplace; `memory_plugin_name` and `knowledge_plugin_name` name the sibling plugin on the same harness when you brand both surfaces; `store_noun` and `store_noun_plural` replace the word "soul" in the prompts; `mcp_server_key` (memory bases only) renames the MCP server as described above; `taint_strictness` (`ask`, `warn`, `quiet` or `off`) is the taint guard default described above; `author` (`name` required, `url` optional), `homepage` and `repository` replace the manifest's identity fields, which otherwise keep the demarkus values (URLs must be absolute http(s)). Unknown fields are rejected.
 
 Rendering:
 
@@ -74,7 +85,7 @@ cd tools && go run ./plugin-prompts write --brands /path/to/brands.json \
          && go run ./plugin-prompts check --brands /path/to/brands.json
 ```
 
-`write` renders the prompts with your names, copies `hooks/` and `scripts/` plus the MCP config of a memory base from the base plugin, rewrites the name, description and any set identity fields in the plugin manifest (`.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json`; version and hooks untouched), and writes a README and `context/brand.json` (the status line's words, read by the helper) into each `output`. A base missing any of those files fails the render. Every directory under `plugins/brands/` is managed: `write` deletes files and directories no configured brand produces, including the whole directory of a brand removed from the file, and `check` reports them as drift. Both need the full checkout, since the copied files come from the base plugin.
+`write` renders the prompts with your names, copies `hooks/` and `scripts/` plus the MCP config of a memory base from the base plugin, rewrites the name, description and any set identity fields in the plugin manifest (`.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json`; version and hooks untouched), and writes a README and `context/brand.json` (the status line's words and the taint default, read by the helper) into each `output`. A base missing any of those files fails the render. Every directory under `plugins/brands/` is managed: `write` deletes files and directories no configured brand produces, including the whole directory of a brand removed from the file, and `check` reports them as drift. Both need the full checkout, since the copied files come from the base plugin.
 
 ## Publishing from your own repository
 

@@ -15,8 +15,10 @@ const MAX_SOURCES = 3;
 
 const DOWNLOADERS = new Set(["curl", "wget", "aria2c"]);
 // Run the command after their options; WRAPPER_ARG skips a numeric option value.
-const WRAPPERS = new Set(["sudo", "doas", "env", "exec", "nohup", "time", "nice", "timeout", "xargs", "stdbuf"]);
+const WRAPPERS = new Set(["sudo", "doas", "env", "exec", "nohup", "time", "nice", "timeout", "xargs", "stdbuf", "command"]);
 const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/;
+// command -v and -V (clustered too) name their operand and run nothing.
+const DESCRIBES = /^-[A-Za-z]*[vV]/;
 const KEYWORDS = new Set(["if", "then", "elif", "else", "do", "while", "until", "!"]);
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -31,6 +33,10 @@ const EXPANSION = /[$`]/;
 // to show it: a proxy variable, a curlrc home, another PATH, a function or
 // alias named curl.
 const REROUTED = /\b(?:(?:https?|all|no)_proxy|(?:HTTPS?|ALL|NO)_PROXY|CURL_HOME)\b|\b(?:(?:XDG_CONFIG_)?HOME|PATH)=|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=/;
+// One more: a declared name an expansion builds (export http_$p=x). Read per
+// stage: as a REROUTED alternative it backtracks quadratically on a long line.
+const DECLARES = /\b(?:export|declare|typeset|readonly)\b/;
+const STAGE_END = /[;&|\n]/;
 const CURL_FLAGS = "sSfiIvkN";
 const CURL_VALUES = "XHdowmAu";
 const CURL_LONG_FLAGS = new Set(["silent", "show-error", "fail", "fail-with-body", "include", "head", "verbose", "insecure", "compressed", "no-buffer", "no-progress-meter"]);
@@ -54,7 +60,13 @@ export function taintOf(tool: string, args: Record<string, unknown> | undefined)
 // reroutes also reads the command bare (escaped newlines joined, quotes and
 // backslashes dropped), so a name split by them is found.
 function reroutes(command: string): boolean {
-  return REROUTED.test(command) || REROUTED.test(command.replace(/\\\n/g, "").replace(/['"\\]/g, ""));
+  const bare = command.replace(/\\\n/g, "").replace(/['"\\]/g, "");
+  return [command, bare].some((text) => REROUTED.test(text) || text.split(STAGE_END).some(declaresExpansion));
+}
+
+function declaresExpansion(stage: string): boolean {
+  const at = stage.search(DECLARES);
+  return at >= 0 && EXPANSION.test(stage.slice(at));
 }
 
 // recordTaint adds a call's untrusted read to sources, first seen first.
@@ -121,8 +133,11 @@ function shellRead(command: string, exempt: boolean, depth = 0): string {
       const wrapper = program(words[i]);
       if (!WRAPPERS.has(wrapper)) break;
       if (wrapper === "xargs") fed = true;
-      i++;
-      while (i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i]))) i++;
+      for (i++; i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i])); i++) {
+        if (wrapper !== "command" || !DESCRIBES.test(words[i])) continue;
+        i = words.length; // nothing runs
+        break;
+      }
     }
     if (env) nested = false;
     const plain = exempt && !fed && !env && !expands;

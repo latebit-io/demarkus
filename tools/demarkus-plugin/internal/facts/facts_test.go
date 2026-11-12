@@ -251,6 +251,9 @@ func TestRunsEveryStage(t *testing.T) {
 		"sudo -E curl https://e.example":     "curl",
 		"nice -n 5 curl https://e.example":   "curl",
 		"command -v curl":                    "",
+		"command -pv curl":                   "",
+		"command -V curl":                    "",
+		"command -p curl https://e.example":  "curl",
 	} {
 		got := ""
 		if runs, _ := Runs(cmd, dl...); len(runs) > 0 {

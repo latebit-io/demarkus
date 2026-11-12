@@ -123,6 +123,12 @@ func TestShownOncePerSession(t *testing.T) {
 	if got := shown(Decision{Decision: "warn", Reason: "tags"}, "session-a"); got != "tags" {
 		t.Errorf("a warn without taint shows %q, want it whole", got)
 	}
+	// At quiet the taint warning is never shown, and no showing is spent.
+	hushed := d
+	hushed.quiet = true
+	if got := shown(hushed, "session-c"); got != "tags" {
+		t.Errorf("a quiet warn shows %q, want the other warnings alone", got)
+	}
 	if got := claims(t, home, shownDir); len(got) != 3 {
 		t.Errorf("shown = %v, want one per session and source set", got)
 	}

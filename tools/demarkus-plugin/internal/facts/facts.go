@@ -161,11 +161,13 @@ func classifySegment(tokens []string) (Check, bool) {
 	return "", false
 }
 
-// wrappers run the command after them, the TS adapters' set; true marks one
-// whose options and numeric values (timeout 10s, nice -n 5) come first.
-// command takes none: command -v curl runs nothing.
+// wrappers run the command after their options and numeric values (timeout
+// 10s, nice -n 5): the TS adapters' set.
 var wrappers = map[string]bool{"sudo": true, "doas": true, "env": true, "exec": true, "nohup": true, "time": true,
-	"nice": true, "timeout": true, "xargs": true, "stdbuf": true, "command": false}
+	"nice": true, "timeout": true, "xargs": true, "stdbuf": true, "command": true}
+
+// describes: command -v and -V (clustered too) name their operand, run nothing.
+var describes = regexp.MustCompile(`^-[A-Za-z]*[vV]`)
 
 // keywords precede a command and run nothing themselves: the TS adapters'
 // set, and the brace that opens a group.
@@ -249,17 +251,19 @@ func commandWords(tokens []string) (rest []string, fed, env bool) {
 			continue
 		}
 		name := filepath.Base(tokens[0])
-		takesOptions, wrapper := wrappers[name]
 		switch {
 		case keywords[tokens[0]]:
 			tokens = tokens[1:]
 		case isEnvAssignment(tokens[0]):
 			env = true
 			tokens = tokens[1:]
-		case wrapper:
+		case wrappers[name]:
 			fed = fed || name == "xargs"
 			tokens = tokens[1:]
-			for takesOptions && len(tokens) > 0 && (strings.HasPrefix(tokens[0], "-") || numericArg.MatchString(tokens[0])) {
+			for len(tokens) > 0 && (strings.HasPrefix(tokens[0], "-") || numericArg.MatchString(tokens[0])) {
+				if name == "command" && describes.MatchString(tokens[0]) {
+					return nil, fed, env
+				}
 				tokens = tokens[1:]
 			}
 		default:
