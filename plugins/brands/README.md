@@ -11,7 +11,7 @@ A brand changes the plugin name, its description, every place the prompts name t
 - the `demarkus-plugin` binary, its pinned version in `scripts/bootstrap.sh`, and its download source (the demarkus GitHub releases).
 - the state directory `~/.demarkus` and the `DEMARKUS_*` environment variables.
 
-One gate default can differ: `taint_strictness` sets the level the taint guard (a write after the session read untrusted content: web, browser, `curl` off the machine, `gh api`) starts from for your users, in place of the upstream `warn`.
+One gate default can differ: `taint_strictness` sets the level the taint guard (a write after the session read untrusted content: web, browser, `curl`, `gh api`) starts from for your users, in place of the upstream `warn`.
 
 | Level | Agent | User |
 | --- | --- | --- |

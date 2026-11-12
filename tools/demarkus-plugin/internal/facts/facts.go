@@ -174,74 +174,36 @@ var describes = regexp.MustCompile(`^-[A-Za-z]*[vV]`)
 var keywords = map[string]bool{"if": true, "then": true, "elif": true, "else": true, "do": true, "while": true,
 	"until": true, "!": true, "{": true}
 
-// unread run commands Runs does not look into: a script handed to a shell or
-// eval, a sourced file, a case arm, a function body.
-var unread = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "eval": true,
-	"source": true, ".": true, "case": true, "function": true}
-
 // numericArg is a wrapper option value: 10, 2.5, 10s, 1m.
 var numericArg = regexp.MustCompile(`^\d[0-9.]*[smhd]?$`)
 
-// Run is one of the programs asked about, as a pipeline stage runs it.
-type Run struct {
-	Program string   // as listed: "curl", "gh api"
-	Args    []string // the words after it, unquoted; nil when a quote is unclosed
-	Fed     bool     // under xargs, which appends operands the stage does not show
-	Env     bool     // the stage assigns variables for it: X=1 curl, env X=1 curl
-}
-
-// Runs lists the programs the stages of command run, in order: quotes
-// respected, env assignments and wrappers (sudo -E) skipped, a path compared
-// by its base name. opaque: the command also runs something Runs cannot read.
-func Runs(command string, programs ...[]string) (runs []Run, opaque bool) {
-	opaque = substitutes.MatchString(command)
+// Runs names the first of programs some pipeline stage of command runs, or "":
+// quotes respected, keywords, env assignments and wrappers (sudo -E) skipped,
+// a path compared by its base name, a quoted name read bare ('wget' is wget).
+func Runs(command string, programs ...[]string) string {
 	segs, _ := splitSegments(command)
 	for _, seg := range segs {
 		for _, stage := range append([]string{seg.stage}, seg.later...) {
-			// Names are matched bare ('wget' runs wget); arguments keep
-			// their quotes for words.
-			raw := strings.Fields(stage)
-			bare := make([]string, len(raw))
-			for i, t := range raw {
-				bare[i] = Bare(t)
+			tokens := strings.Fields(stage)
+			for i, t := range tokens {
+				tokens[i] = bare.Replace(t)
 			}
-			tokens, fed, env := commandWords(bare)
-			opaque = opaque || nests(tokens)
-			i := slices.IndexFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) })
-			if i < 0 {
-				continue
+			tokens = commandWords(tokens)
+			if i := slices.IndexFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) }); i >= 0 {
+				return strings.Join(programs[i], " ")
 			}
-			p := programs[i]
-			args := raw[len(raw)-len(tokens)+len(p):]
-			runs = append(runs, Run{Program: strings.Join(p, " "), Args: words(strings.Join(args, " ")), Fed: fed, Env: env})
 		}
 	}
-	return runs, opaque
+	return ""
 }
 
-// substitutes: the command runs a body in $(...), backticks, <(...) or >(...).
-var substitutes = regexp.MustCompile("[$<>][(]|`")
-
+// bare drops what the shell drops from a name: quotes, backslashes, an
+// escaped newline.
 var bare = strings.NewReplacer("\\\n", "", "'", "", `"`, "", `\`, "")
-
-// Bare is s as the shell names things: escaped newlines joined, quotes and
-// backslashes dropped. For finding more to flag or refuse, never to allow.
-func Bare(s string) string { return bare.Replace(s) }
-
-// nests: the stage's command is one of unread, a variable, or a function
-// definition.
-func nests(tokens []string) bool {
-	if len(tokens) == 0 {
-		return false
-	}
-	return unread[filepath.Base(tokens[0])] || strings.ContainsAny(tokens[0], "$") || strings.Contains(tokens[0], "()") ||
-		(len(tokens) > 1 && strings.HasPrefix(tokens[1], "()"))
-}
 
 // commandWords drops what precedes the command a stage runs: keywords, a
 // subshell's parenthesis, assignments, wrappers and the wrappers' options.
-// fed: one of the wrappers was xargs; env: an assignment was dropped.
-func commandWords(tokens []string) (rest []string, fed, env bool) {
+func commandWords(tokens []string) []string {
 	for len(tokens) > 0 {
 		if t := strings.TrimLeft(tokens[0], "("); t != tokens[0] {
 			tokens = tokens[1:]
@@ -252,73 +214,21 @@ func commandWords(tokens []string) (rest []string, fed, env bool) {
 		}
 		name := filepath.Base(tokens[0])
 		switch {
-		case keywords[tokens[0]]:
-			tokens = tokens[1:]
-		case isEnvAssignment(tokens[0]):
-			env = true
+		case keywords[tokens[0]] || isEnvAssignment(tokens[0]):
 			tokens = tokens[1:]
 		case wrappers[name]:
-			fed = fed || name == "xargs"
 			tokens = tokens[1:]
 			for len(tokens) > 0 && (strings.HasPrefix(tokens[0], "-") || numericArg.MatchString(tokens[0])) {
 				if name == "command" && describes.MatchString(tokens[0]) {
-					return nil, fed, env
+					return nil
 				}
 				tokens = tokens[1:]
 			}
 		default:
-			return tokens, fed, env
+			return tokens
 		}
 	}
-	return tokens, fed, env
-}
-
-// words splits s into shell words, quotes and backslashes removed; nil for
-// an unclosed quote.
-func words(s string) []string {
-	out := []string{}
-	var cur strings.Builder
-	var quote byte
-	open := false
-	write := func(c byte) { _ = cur.WriteByte(c) } // a strings.Builder write never fails
-	end := func() {
-		if open {
-			out = append(out, cur.String())
-		}
-		cur.Reset()
-		open = false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case quote == '\'':
-			if c == quote {
-				quote = 0
-			} else {
-				write(c)
-			}
-		case quote == '"' && c == quote:
-			quote = 0
-		case c == '\\' && i+1 < len(s):
-			i++
-			write(s[i])
-			open = true
-		case quote == '"':
-			write(c)
-		case c == '\'' || c == '"':
-			quote, open = c, true
-		case c == ' ' || c == '\t':
-			end()
-		default:
-			write(c)
-			open = true
-		}
-	}
-	if quote != 0 {
-		return nil
-	}
-	end()
-	return out
+	return tokens
 }
 
 func hasPrefix(tokens, prefix []string) bool {

@@ -21,27 +21,9 @@ const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/;
 const DESCRIBES = /^-[A-Za-z]*[vV]/;
 const KEYWORDS = new Set(["if", "then", "elif", "else", "do", "while", "until", "!"]);
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
-const SOURCES = new Set([".", "source"]);
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const HEREDOC = /<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1([^\n]*)\n(?:[^\n]*\n)*?[ \t]*\2[ \t]*(?:\n|$)/g;
 const MAX_NESTING = 3;
-// localCurl's vocabulary, the binary's taint/local.go: a loopback URL with no
-// userinfo, glob or backslash, a redirection word, the options vouched for.
-const LOOPBACK = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?(?:[/?#][^\s{}[\]\\@]*)?$/i;
-const REDIRECTION = /^(?:\d*|&)[<>]/;
-const EXPANSION = /[$`]/;
-// Ways a command sends a loopback curl elsewhere with nothing in its arguments
-// to show it: a proxy variable, a curlrc home, another PATH, a function or
-// alias named curl.
-const REROUTED = /\b(?:(?:https?|all|no)_proxy|(?:HTTPS?|ALL|NO)_PROXY|CURL_HOME)\b|\b(?:(?:XDG_CONFIG_)?HOME|PATH)=|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=/;
-// One more: a declared name an expansion builds (export http_$p=x). Read per
-// stage: as a REROUTED alternative it backtracks quadratically on a long line.
-const DECLARES = /\b(?:export|declare|typeset|readonly)\b/;
-const STAGE_END = /[;&|\n]/;
-const CURL_FLAGS = "sSfiIvkN";
-const CURL_VALUES = "XHdowmAu";
-const CURL_LONG_FLAGS = new Set(["silent", "show-error", "fail", "fail-with-body", "include", "head", "verbose", "insecure", "compressed", "no-buffer", "no-progress-meter"]);
-const CURL_LONG_VALUES = new Set(["request", "header", "data", "data-raw", "data-binary", "data-urlencode", "json", "output", "write-out", "max-time", "connect-timeout", "user-agent", "user", "retry", "retry-delay"]);
 
 // isGatedWrite matches every demarkus tool that changes a store.
 export function isGatedWrite(toolName: string): boolean {
@@ -55,19 +37,7 @@ export function taintOf(tool: string, args: Record<string, unknown> | undefined)
   if (WEB_TOOL.test(tool) && !LOCAL_TOOL.test(tool)) return clip(url ? `${tool} ${publicURL(url)}` : tool);
   if (BROWSER_TOOL.test(tool)) return clip(tool);
   const command = typeof args?.command === "string" ? args.command : "";
-  return SHELL_TOOL.test(tool) ? shellRead(command, !reroutes(command)) : "";
-}
-
-// reroutes also reads the command bare (escaped newlines joined, quotes and
-// backslashes dropped), so a name split by them is found.
-function reroutes(command: string): boolean {
-  const bare = command.replace(/\\\n/g, "").replace(/['"\\]/g, "");
-  return [command, bare].some((text) => REROUTED.test(text) || text.split(STAGE_END).some(declaresExpansion));
-}
-
-function declaresExpansion(stage: string): boolean {
-  const at = stage.search(DECLARES);
-  return at >= 0 && EXPANSION.test(stage.slice(at));
+  return SHELL_TOOL.test(tool) ? shellRead(command) : "";
 }
 
 // recordTaint adds a call's untrusted read to sources, first seen first.
@@ -120,46 +90,25 @@ function foreignRead(tool: string, url: string): string {
 // shellRead labels a downloader or gh api run at a command position (past env
 // assignments, keywords, wrappers), in a substitution or a sh -c / eval script,
 // by program only (arguments carry tokens). Quoted text or arguments: no run.
-// exempt: a local curl is no read (false once the command reroutes curl).
-function shellRead(command: string, exempt: boolean, depth = 0): string {
+function shellRead(command: string, depth = 0): string {
   if (depth > MAX_NESTING) return "shell script too nested to check";
   const scripts: string[] = [];
-  const runs = commandsOf(command.replace(HEREDOC, "$3\n"), scripts).map(runOf);
-  // A sourced file can set a proxy for every curl here, as an export can.
-  const local = exempt && !runs.some(({ words, at }) => SOURCES.has(program(words[at])));
-  for (const { words, expands, at, fed, env } of runs) {
-    const plain = local && !fed && !env && !expands;
-    if (plain && program(words[at]) === "curl" && localCurl(words.slice(at + 1))) continue;
-    const found = downloaderAt(words, at, scripts);
+  for (const words of commandsOf(command.replace(HEREDOC, "$3\n"), scripts)) {
+    let i = 0;
+    for (;;) {
+      while (i < words.length && (ENV_ASSIGN.test(words[i]) || KEYWORDS.has(words[i]))) i++;
+      const wrapper = program(words[i]);
+      if (!WRAPPERS.has(wrapper)) break;
+      for (i++; i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i])); i++) {
+        if (wrapper !== "command" || !DESCRIBES.test(words[i])) continue;
+        i = words.length; // nothing runs
+        break;
+      }
+    }
+    const found = downloaderAt(words, i, scripts);
     if (found) return `shell download: ${found}`;
   }
-  // A variable set here reaches the scripts run from here.
-  const nested = local && !runs.some((run) => run.env);
-  return scripts.reduce((found, script) => found || shellRead(script, nested, depth + 1), "");
-}
-
-type Run = Command & { at: number; fed: boolean; env: boolean };
-
-// runOf finds the word a command runs, at. fed: under xargs, which appends
-// operands the words do not show; env: a variable set for the run (PATH,
-// HOME, a proxy) can move it.
-function runOf(command: Command): Run {
-  const { words } = command;
-  let i = 0;
-  let fed = false;
-  let env = false;
-  for (;;) {
-    for (; i < words.length && (ENV_ASSIGN.test(words[i]) || KEYWORDS.has(words[i])); i++) env ||= ENV_ASSIGN.test(words[i]);
-    const wrapper = program(words[i]);
-    if (!WRAPPERS.has(wrapper)) break;
-    if (wrapper === "xargs") fed = true;
-    for (i++; i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i])); i++) {
-      if (wrapper !== "command" || !DESCRIBES.test(words[i])) continue;
-      i = words.length; // nothing runs
-      break;
-    }
-  }
-  return { ...command, at: i, fed, env };
+  return scripts.reduce((found, script) => found || shellRead(script, depth + 1), "");
 }
 
 // downloaderAt names the downloader the command at s is, or ""; a script it
@@ -176,47 +125,17 @@ function downloaderAt(words: string[], s: number, scripts: string[]): string {
   return "";
 }
 
-// localCurl: a curl run that reads this machine only: every operand a loopback
-// URL, every option a known one (-L, --proxy and the rest are not vouched
-// for). curl alone: wget and aria2c follow a redirect unasked.
-function localCurl(args: string[]): boolean {
-  if (args.some((w) => EXPANSION.test(w))) return false; // not what curl gets
-  let urls = 0;
-  for (let i = 0; i < args.length; i++) {
-    const w = args[i];
-    let value = false;
-    if (REDIRECTION.test(w)) continue;
-    if (w.startsWith("--")) {
-      value = CURL_LONG_VALUES.has(w.slice(2));
-      if (!value && !CURL_LONG_FLAGS.has(w.slice(2))) return false;
-    } else if (w.length > 1 && w[0] === "-") {
-      // A cluster: flags, then at most one option whose value is the rest of
-      // the cluster or, when none, the next word.
-      let j = 1;
-      while (j < w.length && CURL_FLAGS.includes(w[j])) j++;
-      if (j < w.length && !CURL_VALUES.includes(w[j])) return false;
-      value = j === w.length - 1;
-    } else if (LOOPBACK.test(w)) urls++;
-    else return false;
-    if (value && ++i >= args.length) return false;
-  }
-  return urls > 0;
-}
-
 // program is a command word's base name: a path runs its last segment.
 function program(word = ""): string {
   return word.slice(word.lastIndexOf("/") + 1).toLowerCase();
 }
 
-type Command = { words: string[]; expands: boolean };
-
-// commandsOf splits a shell line into simple commands of unquoted words.
-// $(...) and `...` bodies run even inside double quotes: they go to scripts
-// and mark the command. A brace inside a word is no group; a # word, a comment.
-function commandsOf(line: string, scripts: string[]): Command[] {
-  const commands: Command[] = [];
+// commandsOf splits a shell line into simple commands of unquoted words;
+// $(...) and `...` bodies, which run even inside double quotes, go to scripts.
+// A # where a word starts is a comment.
+function commandsOf(line: string, scripts: string[]): string[][] {
+  const commands: string[][] = [];
   let words: string[] = [];
-  let expands = false;
   let text = "";
   let open = false;
   let quote = "";
@@ -227,9 +146,8 @@ function commandsOf(line: string, scripts: string[]): Command[] {
   };
   const endCommand = () => {
     endWord();
-    if (words.length) commands.push({ words, expands });
+    if (words.length) commands.push(words);
     words = [];
-    expands = false;
   };
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
@@ -243,7 +161,6 @@ function commandsOf(line: string, scripts: string[]): Command[] {
       const stop = end < 0 ? line.length : end;
       scripts.push(line.slice(c === "`" ? i + 1 : i + 2, stop));
       i = stop;
-      expands = true;
       open = true;
       continue;
     }
@@ -266,7 +183,7 @@ function commandsOf(line: string, scripts: string[]): Command[] {
       i = (end < 0 ? line.length : end) - 1;
     } else if (c === " " || c === "\t") {
       endWord();
-    } else if (";&|\n()".includes(c) || ("{}".includes(c) && !open)) {
+    } else if (";&|\n(){}".includes(c)) {
       endCommand();
     } else {
       text += c;

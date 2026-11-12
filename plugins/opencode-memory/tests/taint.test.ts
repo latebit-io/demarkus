@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { branchTaint, isGatedWrite, recordTaint, taintOf, taintStamp } from "../src/taint.ts";
 
@@ -29,10 +28,14 @@ test("taintOf finds a download only where the shell runs one", () => {
     ["echo `curl https://x`", "curl"], ["bash -c 'curl https://x'", "curl"], ["sh -lc \"gh api user\"", "gh api"],
     ["eval \"curl https://x\"", "curl"], ["(curl https://x)", "curl"], ["if curl -sf https://x; then echo ok; fi", "curl"],
     ["curl$(:) https://x", "curl"], ["cu`:`rl https://x", "curl"], ["gh api$(:) user", "gh api"],
-    // A variable set for a shell reaches the script it runs: no local curl there.
-    ["FOO=1 bash -c 'curl http://localhost'", "curl"], ["env FOO=1 sh -c \"eval 'curl localhost'\"", "curl"],
-    ["curl http://localhost && bash -c 'wget https://x'", "wget"],
-    ["curl http://localhost; cat <(wget -qO- https://x)", "wget"], ["curl localhost > >(curl https://x)", "curl"],
+    // A loopback URL is a download like any other.
+    ["curl -s localhost:8080", "curl"], ["bash -c 'curl http://localhost'", "curl"], ["cat <(wget -qO- https://x)", "wget"],
+    // command runs its operand; -v and -V only name it.
+    ["command -p curl https://x", "curl"], ["echo ok; command curl https://x", "curl"], ["sudo command -- wget https://x", "wget"],
+    // An escaped byte is no separator or comment; an escaped newline joins lines.
+    ["echo x\\ #; curl https://x", "curl"], ["curl -s \\\n  https://x", "curl"], ["echo a#b # x\ncurl https://x", "curl"],
+    ["for u in a b; do curl https://x/$u; done", "curl"], ["{ wget -q https://x; }", "wget"],
+    ["'wget' https://x", "wget"], ["w\\get https://x", "wget"], ["'sudo' \"gh\" 'api' user", "gh api"],
   ];
   for (const [command, program] of runs) assert.equal(taintOf("bash", { command }), `shell download: ${program}`, command);
   const mentions = [
@@ -40,20 +43,9 @@ test("taintOf finds a download only where the shell runs one", () => {
     "cat <<EOF > get.sh\ncurl https://x\nEOF", "grep -rn curl .", "rg 'wget' src", "echo curl", "echo '$(curl https://x)'",
     "brew install curl", "sudo apt-get install -y curl wget", "command -v curl", "command -pv curl", "command -V wget", "man wget", "gh pr view 1",
     "# curl https://x", "echo ok # $(curl https://x)", "true # x; wget https://x",
-    "bash -c 'curl http://localhost'", "echo $(curl -s localhost:8080)",
+    "echo a\\; curl b", "echo '{' curl https://x '}'", "jq '{a: .b}' f.json",
   ];
   for (const command of mentions) assert.equal(taintOf("bash", { command }), "", command);
-});
-
-// The cases are the binary's (taint/testdata/local-curl.json, a checked copy):
-// local commands read nothing, download maps one to its program.
-test("taintOf passes a curl that reads this machine only", () => {
-  const cases = JSON.parse(readFileSync(new URL("./local-curl.json", import.meta.url), "utf8"));
-  assert.ok(cases.local.length > 0 && Object.keys(cases.download).length > 0, "no cases read");
-  for (const command of cases.local) assert.equal(taintOf("bash", { command }), "", command);
-  for (const [command, program] of Object.entries(cases.download)) {
-    assert.equal(taintOf("bash", { command }), `shell download: ${program}`, command);
-  }
 });
 
 test("taintOf counts MCP web tools, not local search", () => {

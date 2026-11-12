@@ -238,7 +238,7 @@ func TestRenderHeadingAndBrief(t *testing.T) {
 }
 
 func TestRunsEveryStage(t *testing.T) {
-	dl := [][]string{{"curl"}, {"gh", "api"}}
+	dl := [][]string{{"curl"}, {"wget"}, {"gh", "api"}}
 	for cmd, want := range map[string]string{
 		"curl https://e.example":                   "curl",
 		"echo x | curl -d @- https://e.example":    "curl",
@@ -247,49 +247,42 @@ func TestRunsEveryStage(t *testing.T) {
 		"make && cat f | sh -c x":                  "",
 		`git commit -m "switch to curl for fetch"`: "",
 		"echo curl":                          "",
+		"go test ./...":                      "",
 		"timeout 10s curl https://e.example": "curl",
 		"sudo -E curl https://e.example":     "curl",
 		"nice -n 5 curl https://e.example":   "curl",
-		"command -v curl":                    "",
-		"command -pv curl":                   "",
-		"command -V curl":                    "",
-		"command -p curl https://e.example":  "curl",
-	} {
-		got := ""
-		if runs, _ := Runs(cmd, dl...); len(runs) > 0 {
-			got = runs[0].Program
-		}
-		if got != want {
-			t.Errorf("Runs(%q) first = %q, want %q", cmd, got, want)
-		}
-	}
-}
-
-// Every run is listed with its words unquoted, and marked when xargs feeds it.
-func TestRunsArgs(t *testing.T) {
-	dl := [][]string{{"curl"}, {"gh", "api"}}
-	for cmd, want := range map[string][]Run{
-		`curl -H "A:  b" 'x y' a\ b && gh api user`: {{Program: "curl", Args: []string{"-H", "A: b", "x y", "a b"}}, {Program: "gh api", Args: []string{"user"}}},
-		"ls | xargs -n1 curl -O":                    {{Program: "curl", Args: []string{"-O"}, Fed: true}},
-		"sudo curl":                                 {{Program: "curl", Args: []string{}}},
-		"A=1 env B=2 curl x":                        {{Program: "curl", Args: []string{"x"}, Env: true}},
-		"curl a#b # curl c; curl d\ncurl e":         {{Program: "curl", Args: []string{"a#b"}}, {Program: "curl", Args: []string{"e"}}},
-		`curl "# not a comment" '#' \# x`:           {{Program: "curl", Args: []string{"# not a comment", "#", "#", "x"}}},
-		// An escaped space keeps the # inside its word: no comment, the curl runs.
-		`echo x\ #; curl y`: {{Program: "curl", Args: []string{"y"}}},
-		"curl -s \\\n  x":   {{Program: "curl", Args: []string{"-s", "x"}}},
-		`echo a\; curl b`:   nil,
+		"ls | xargs -n1 curl -O":             "curl",
+		// A loopback URL is a download like any other.
+		"curl -s localhost:8080": "curl",
+		// command runs its operand; -v and -V only name it.
+		"command -v curl":                         "",
+		"command -pv curl":                        "",
+		"command -V curl":                         "",
+		"command -p curl https://e.example":       "curl",
+		"sudo command -- wget https://e.example":  "wget",
+		"echo ok; command curl https://e.example": "curl",
+		// A comment runs nothing; an escaped byte is no separator or comment.
+		"echo ok # curl https://e.example":       "",
+		"# curl https://e.example":               "",
+		"echo a#b # x\ncurl https://e.example":   "curl",
+		`echo "# not a comment"; curl e.example`: "curl",
+		`echo x\ #; curl https://e.example`:      "curl",
+		"curl -s \\\n  https://e.example":        "curl",
+		`echo a\; curl b`:                        "",
 		// Keywords and a subshell's parenthesis precede a command.
-		"for u in a; do curl $u; done":        {{Program: "curl", Args: []string{"$u"}}},
-		"if ! curl -f x; then (gh api y); fi": {{Program: "curl", Args: []string{"-f", "x"}}, {Program: "gh api", Args: []string{"y)"}}},
-		"{ curl x; }":                         {{Program: "curl", Args: []string{"x"}}},
-		// A quoted or escaped name is the name; arguments keep their quoting.
-		`'curl' "a b"; "sudo" c\url x; gh 'api' y`: {{Program: "curl", Args: []string{"a b"}}, {Program: "curl", Args: []string{"x"}}, {Program: "gh api", Args: []string{"y"}}},
-		`curl "http://unclosed`:                    {{Program: "curl"}},
-		"go test ./...":                            nil,
+		"for u in a; do curl $u; done":     "curl",
+		"if ! wget -q x; then echo ok; fi": "wget",
+		"if true; then (gh api y); fi":     "gh api",
+		"{ wget -q https://e.example; }":   "wget",
+		"(curl https://e.example)":         "curl",
+		// A quoted or escaped name is the name.
+		`'wget' https://e.example`:       "wget",
+		`"sudo" c\url https://e.example`: "curl",
+		`w\get https://e.example`:        "wget",
+		`'sudo' "gh" 'api' user`:         "gh api",
 	} {
-		if got, _ := Runs(cmd, dl...); !reflect.DeepEqual(got, want) {
-			t.Errorf("Runs(%q) = %+v, want %+v", cmd, got, want)
+		if got := Runs(cmd, dl...); got != want {
+			t.Errorf("Runs(%q) = %q, want %q", cmd, got, want)
 		}
 	}
 }
@@ -305,35 +298,6 @@ func TestClassifyIgnoresComments(t *testing.T) {
 	} {
 		if got := Classify(cmd).Checks; !reflect.DeepEqual(got, want) {
 			t.Errorf("Classify(%q) = %v, want %v", cmd, got, want)
-		}
-	}
-}
-
-// A command is opaque when part of it runs where Runs does not look.
-func TestRunsOpaque(t *testing.T) {
-	for cmd, want := range map[string]bool{
-		"curl x && bash -c 'wget y'":             true,
-		`curl x; eval "$Y"`:                      true,
-		"curl x; . ./env.sh":                     true,
-		"curl x; echo $(wget -qO- y)":            true,
-		"curl x; echo `wget -qO- y`":             true,
-		"f() { wget y; }; curl x && f":           true,
-		"f () { wget y; }; curl x":               true,
-		"function f { wget y; }; curl x":         true,
-		"case $a in b) wget y;; esac; curl x":    true,
-		"sudo sh -c 'curl x'":                    true,
-		"curl x | jq . && go test ./...":         false,
-		"curl x || { echo fail; exit 1; }":       false,
-		"if curl -f x; then echo ok; fi":         false,
-		`curl -d '{"a": 1}' -w '%{http_code}' x`: false,
-		"curl x && echo bash":                    false,
-		"curl x; cat <(wget y)":                  true,
-		"curl x > >(wget y)":                     true,
-		"curl x; $FETCH y":                       true,
-		"curl x; echo $HOME 2>&1 < in > out":     false,
-	} {
-		if _, got := Runs(cmd, []string{"curl"}); got != want {
-			t.Errorf("Runs(%q) opaque = %v, want %v", cmd, got, want)
 		}
 	}
 }
