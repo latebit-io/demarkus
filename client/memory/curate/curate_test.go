@@ -17,6 +17,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/neardup"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
@@ -175,6 +176,26 @@ func TestSplitMeetsTheWritePolicy(t *testing.T) {
 	in.Policy = &publishpolicy.Policy{Strictness: publishpolicy.Block, RequiredFields: []string{"type"}}
 	if p := Propose(in); len(p.Refused) != 0 || p.Writes[0].Metadata["type"] != protocol.OKFDefaultType {
 		t.Errorf("untyped: refused = %q, topic type = %q", p.Refused, p.Writes[0].Metadata["type"])
+	}
+}
+
+// A topic keeps its parent's pins, naming the same sources from its own path.
+func TestSplitCarriesPinsToTopics(t *testing.T) {
+	const pins = "../adr/0006.md/v5, https://github.com/o/r/tree/abcdef0/src"
+	in := &Input{Path: "/plans/big.md", Body: bigDoc(), Version: 7, Metadata: map[string]string{"tags": "plan", "type": "Plan", provenance.Key: pins}}
+	p := Propose(in)
+	if p.Kind != KindSplit {
+		t.Fatalf("kind %s: %v", p.Kind, p.Unfixed)
+	}
+	topic, hub := p.Writes[0], p.Writes[len(p.Writes)-1]
+	if got, want := topic.Metadata[provenance.Key], "/adr/0006.md/v5, https://github.com/o/r/tree/abcdef0/src"; got != want {
+		t.Errorf("topic pins = %q, want %q", got, want)
+	}
+	if hub.Metadata[provenance.Key] != pins {
+		t.Errorf("hub pins = %q, want them untouched", hub.Metadata[provenance.Key])
+	}
+	if topic.Metadata[curatedDigest] != topicDigest(topic.Body, docwrite.Carried(topic.Metadata)) {
+		t.Error("the digest does not cover the carried pins: a resumed split would rewrite the topic")
 	}
 }
 

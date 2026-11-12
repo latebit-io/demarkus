@@ -122,6 +122,33 @@ func (p Pin) Target(docPath string) string {
 	return p.Source
 }
 
+// Portable splits a rel-based-on value into the URL refs, which a copy in
+// another store keeps, and the count of the rest: a path pin names a
+// document only in the store that holds it.
+func Portable(value string) (refs []string, left int) {
+	for _, pin := range Parse(value) {
+		if pin.kind != malformed && strings.Contains(pin.Source, "://") {
+			refs = append(refs, pin.Ref)
+		} else {
+			left++
+		}
+	}
+	return refs, left
+}
+
+// Rebased is a rel-based-on value with each relative path pin made absolute
+// against docPath, so a document at another path in the store carries it.
+func Rebased(value, docPath string) string {
+	refs := protocol.SplitTags(value)
+	for i, ref := range refs {
+		p := ParsePin(ref)
+		if local := p.Local(docPath); local != "" && !strings.HasPrefix(ref, "/") {
+			refs[i] = local + ref[len(p.Source):]
+		}
+	}
+	return strings.Join(refs, ", ")
+}
+
 // Under reports whether target is source or something under it: a
 // directory, a repository URL covering its commits. It allocates nothing,
 // since a catalog filter calls it for every pin in a world.

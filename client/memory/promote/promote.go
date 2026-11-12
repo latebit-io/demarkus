@@ -21,6 +21,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 )
 
@@ -263,8 +264,11 @@ type Staged struct {
 	Promoted  bool
 	Stub      bool
 	Qualifies string
-	Notes     []string
-	Packet    string
+	// Pins are the source's rel-based-on values a copy in another store
+	// keeps: the URLs. A path pin names a document here only.
+	Pins   []string
+	Notes  []string
+	Packet string
 }
 
 // Stage reads the source for the agent to distill. Nothing is written.
@@ -272,6 +276,10 @@ func Stage(in *Input, l *layout.Layout) Staged {
 	s := Staged{Input: *in, Qualifies: l.Qualifies(in.Path, in.Metadata), Packet: docwrite.Digest(strconv.Itoa(in.Version), in.Body)}
 	s.Markers, s.Promoted = ParseMarkers(in.Body)
 	s.Stub = s.Promoted && IsStub(in.Body)
+	var left int
+	if s.Pins, left = provenance.Portable(in.Metadata[provenance.Key]); left > 0 {
+		s.Notes = append(s.Notes, fmt.Sprintf("%d %s values not carried: only a URL names its source from another store", left, provenance.Key))
+	}
 	return s
 }
 
@@ -303,6 +311,9 @@ func (s *Staged) Report() string {
 		if v := s.Metadata[k]; v != "" {
 			fmt.Fprintf(&b, "%s: %s\n", k, v)
 		}
+	}
+	if len(s.Pins) > 0 {
+		fmt.Fprintf(&b, "%s: %s\n", provenance.Key, strings.Join(s.Pins, ", "))
 	}
 	b.WriteString("\n" + docframe.Frame(s.Body) + docframe.Flags(s.Body, s.Metadata))
 	return b.String()
@@ -580,6 +591,10 @@ type Check struct {
 func Examine(d *Draft, policy *publishpolicy.Policy) *Check {
 	c := &Check{Draft: *d, Policy: policy, Problems: gate.Problems(d.Path, d.Body, d.Metadata["description"]), Missing: gate.Missing(d.Path, d.Metadata, d.Body, policy)}
 	c.Packet = docwrite.Digest(d.Path, strconv.Itoa(d.Version), d.Body, metaDigest(d.Metadata), d.Source)
+	// A policy that requires the pin already says so as a finding.
+	if d.Metadata[provenance.Key] == "" && (policy == nil || !slices.Contains(policy.ForCaller().RequiredFields, provenance.Key)) {
+		c.Notes = append(c.Notes, "unpinned: no "+provenance.Key+", so drift from the draft's sources cannot be checked")
+	}
 	return c
 }
 
