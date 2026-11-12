@@ -10,7 +10,7 @@ Stages in order; each is a gate, failing one stops there, **not** published. Eve
    - Pin: the source's own web permalink to the exact immutable version; never a moving one (branch, tag, latest).
    - Only a version that holds what the draft describes and that readers can reach: nothing uncommitted or unpublished.
    - No such permalink, or a check you cannot make: no pin for that source.
-   - Every pin, staged ones included, is stripped as step 2 strips the body: one carrying userinfo, a token, a secret or PII is dropped.
+   - Drop any pin carrying userinfo, a credential, a token or PII; staged ones included.
 
 5. **Dry run.** `mark_promote` through the destination's server: `url` the target (`mark://<world>/<path>`{{if not .ServesPrompts}}, or the plain bare path through its server{{end}}; never synthesize a `mark://` authority from an MCP slug), `phase: dry_run`, `body`, `metadata`, `source`. `source` is the origin as a non-sensitive identifier by default; the full path only with explicit approval after checking it for names, emails, project identifiers, secrets, tokens, PII; an external origin canonicalized (no userinfo, query, fragment, secrets); unsanitizable: omit `source`, never pass a raw origin. Outcomes:
    - `status: not-permitted`: surface, stop; never guess another target.
