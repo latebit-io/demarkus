@@ -226,3 +226,20 @@ func TestCurateScopeAppliesThePlanPerDocument(t *testing.T) {
 		t.Errorf("hub publish = %+v", hub)
 	}
 }
+
+// A path a tool derives is refused at the write: /graph/shards.md is an
+// authored document, the topics a split would put under /graph/shards/ are not.
+func TestCurateSplitNeverWritesIntoGeneratedGraphData(t *testing.T) {
+	backend := &fetchtest.Client{Published: map[string]fetch.Result{
+		"host:6309/graph/shards.md": fetchtest.Head(bigBody(), 2, map[string]string{"tags": "plan", "type": "Plan"}),
+	}}
+	tools := newTools(t, backend, writingHooks())
+	report := tools.Curate(t.Context(), marktools.CurateArgs{URL: "/graph/shards.md"})
+	if !strings.Contains(report.Text, "status: split\n") {
+		t.Fatalf("report = %+v", report)
+	}
+	got := tools.Curate(t.Context(), marktools.CurateArgs{URL: "/graph/shards.md", Apply: true, Proposal: proposalHash(t, report)})
+	if !got.IsError || !strings.Contains(got.Text, " is generated graph data") || len(backend.PublishCalls) != 0 {
+		t.Fatalf("apply = %+v, publishes %d", got, len(backend.PublishCalls))
+	}
+}

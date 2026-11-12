@@ -172,7 +172,7 @@ func (t *Tools) GraphPublish(ctx context.Context, args GraphPublishArgs) Result 
 		meta["retention"] = strconv.Itoa(args.Retention)
 	}
 	// Single writer, so a conflict is reported, never merged.
-	result, err := t.doc(ctx, target, write).Publish(ctx, docwrite.Write{
+	result, err := t.bind(ctx, target, write).Publish(ctx, docwrite.Write{
 		Body: scope.Store.Export(), ExpectedVersion: expected, Metadata: meta,
 	}, merge.OnConflictFail)
 	if err != nil {

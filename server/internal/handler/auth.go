@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"io"
-	"strings"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -95,7 +94,7 @@ func (h *Handler) Deny(w io.Writer, req protocol.Request, err error) {
 // checkReadAuth decides a read without writing a response: nil when allowed,
 // otherwise the auth verdict.
 func (h *Handler) checkReadAuth(reqPath, token string) error {
-	return h.tokenStore().AuthorizeRead(token, scopePath(reqPath))
+	return h.tokenStore().AuthorizeRead(token, storefmt.ScopePath(reqPath))
 }
 
 // unreadable is LOOKUP's skip for the requester's token, hashed once: true
@@ -109,14 +108,4 @@ func (h *Handler) unreadable(token string) func(string) bool {
 // the one LOOKUP filters its rows by.
 func (h *Handler) readableBy(req protocol.Request) func(string) bool {
 	return func(p string) bool { return h.checkReadAuth(p, req.Metadata["auth"]) == nil }
-}
-
-// scopePath is the canonical path with a trailing slash kept: "/" or a
-// prefix ending in "/" names a subtree, anything else one document.
-func scopePath(reqPath string) string {
-	scope := storefmt.CanonicalPath(reqPath)
-	if strings.HasSuffix(reqPath, "/") && scope != "/" {
-		scope += "/"
-	}
-	return scope
 }

@@ -324,6 +324,10 @@ func TestDocumentToolsRefuseGeneratedGraphData(t *testing.T) {
 			}
 		}
 	}
+	// A directory of it is refused too: the journal route writes beneath it.
+	if got := tools.Append(t.Context(), marktools.AppendArgs{URL: "/graph/worlds/", Body: "entry\n", Route: marktools.RouteToday}); !got.IsError || got.Text != "/graph/worlds/ is generated graph data: derived from the documents, never written directly" {
+		t.Errorf("journal under a generated directory = %+v", got)
+	}
 	if n := len(backend.PublishCalls) + len(backend.AppendCalls) + len(backend.ArchiveCalls) + len(backend.FetchCalls) + len(backend.ListCalls); n != 0 {
 		t.Errorf("a refusal sent %d requests", n)
 	}

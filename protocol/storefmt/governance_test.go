@@ -27,6 +27,9 @@ func TestGeneratedGraphTarget(t *testing.T) {
 		"/a/../graph/manifest.md":          true,
 		"/GRAPH.md":                        true,
 		"/Graph/Worlds/team-a/manifest.md": true,
+		"/graph/worlds/":                   true,
+		"/Graph//Shards/":                  true,
+		"/graph/":                          false,
 		"/graph/notes.md":                  false,
 		"/":                                false,
 	} {

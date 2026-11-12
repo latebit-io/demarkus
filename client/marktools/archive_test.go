@@ -126,8 +126,8 @@ func TestArchiveRecursiveSkipsGeneratedGraphData(t *testing.T) {
 	if got.IsError || !strings.HasPrefix(got.Text, "status: archived\narchived: 1 of 1\n- /graph/notes.md: ") {
 		t.Fatalf("archive = %+v", got)
 	}
-	// A generated directory holds nothing a sweep may take.
-	if got := tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/graph/worlds/", Recursive: true}); !got.IsError || !strings.Contains(got.Text, "no live documents under /graph/worlds/") {
+	// A generated directory is refused outright.
+	if got := tools.Archive(t.Context(), marktools.ArchiveArgs{URL: "/graph/worlds/", Recursive: true}); !got.IsError || !strings.Contains(got.Text, "/graph/worlds/ is generated graph data") {
 		t.Errorf("sweep of a generated directory = %+v", got)
 	}
 	if len(backend.ArchiveCalls) != 1 || backend.ArchiveCalls[0].Path != "/graph/notes.md" {

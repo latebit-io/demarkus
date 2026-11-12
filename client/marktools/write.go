@@ -28,11 +28,17 @@ type WriteFunc = docwrite.WriteFunc
 // WriteOp is one write, sent with the ctx and token it is given.
 type WriteOp = docwrite.WriteOp
 
-// writer is authorize for a document tool. Generated graph data is refused
-// first: it is derived, and a hand write breaks what seeds from it.
+// errGraphData refuses a write to generated graph data: it is derived, and a
+// hand write breaks what seeds from it.
+func errGraphData(p string) error {
+	return fmt.Errorf("%s is generated graph data: derived from the documents, never written directly", p)
+}
+
+// writer is authorize for a document tool, which never writes generated
+// graph data: refused first, before any request.
 func (t *Tools) writer(ctx context.Context, target Target, verb string) (WriteFunc, *Result) {
 	if storefmt.GeneratedGraphTarget(target.Path) {
-		bad := failure("%s is generated graph data: derived from the documents, never written directly", target.Path)
+		bad := failure("%v", errGraphData(target.Path))
 		return nil, &bad
 	}
 	return t.authorize(ctx, target, verb)
@@ -53,8 +59,17 @@ func (t *Tools) authorize(ctx context.Context, target Target, verb string) (Writ
 	return write, nil
 }
 
-// doc binds the shared write contract to one target.
+// doc is bind for a document tool. writer saw the argument; a path the tool
+// derived from it (a journal, a split topic) is refused here, at the write.
 func (t *Tools) doc(ctx context.Context, target Target, write WriteFunc) *docwrite.Doc {
+	if write != nil && storefmt.GeneratedGraphTarget(target.Path) {
+		write = func(context.Context, WriteOp) (fetch.Result, error) { return fetch.Result{}, errGraphData(target.Path) }
+	}
+	return t.bind(ctx, target, write)
+}
+
+// bind binds the shared write contract to one target.
+func (t *Tools) bind(ctx context.Context, target Target, write WriteFunc) *docwrite.Doc {
 	return &docwrite.Doc{
 		Backend: t.backend, Host: target.Host, Path: target.Path,
 		ReadToken: t.readToken(ctx, target.Host), Write: write,
