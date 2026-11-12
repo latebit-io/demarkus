@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -184,13 +185,14 @@ func validateBrands(spec *manifest) error {
 }
 
 // validateSiblingTaint: sibling plugins hook the same writes, so two levels
-// would answer at random. byPlugin is keyed harness/plugin_name.
+// would answer at random; unset is the binary's warn. byPlugin is keyed
+// harness/plugin_name.
 func validateSiblingTaint(brands []brand, targets map[string]*target, byPlugin map[string]*brand) error {
 	for i := range brands {
 		b := &brands[i]
 		for _, sibling := range []string{b.MemoryPluginName, b.KnowledgePluginName} {
 			other, ok := byPlugin[targets[b.Base].Harness+"/"+sibling]
-			if ok && other.TaintStrictness != b.TaintStrictness {
+			if ok && cmp.Or(other.TaintStrictness, "warn") != cmp.Or(b.TaintStrictness, "warn") {
 				return fmt.Errorf("brand %q: taint_strictness %q differs from sibling %q (%q)", b.Name, b.TaintStrictness, other.Name, other.TaintStrictness)
 			}
 		}

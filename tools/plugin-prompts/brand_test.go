@@ -263,6 +263,10 @@ func TestValidateBrandsSiblingsShareTaintStrictness(t *testing.T) {
 	if err := validateBrands(&manifest{Targets: targets, Brands: pair("off", "", "acme-knowledge")}); err == nil || !strings.Contains(err.Error(), "differs from sibling") {
 		t.Errorf("siblings at two levels: err = %v", err)
 	}
+	// Unset is warn at run time, so the two agree.
+	if err := validateBrands(&manifest{Targets: targets, Brands: pair("warn", "", "acme-knowledge")}); err != nil {
+		t.Errorf("warn beside an unset sibling: %v", err)
+	}
 	if err := validateBrands(&manifest{Targets: targets, Brands: pair("off", "", "")}); err != nil {
 		t.Errorf("unlinked brands at two levels: %v", err)
 	}

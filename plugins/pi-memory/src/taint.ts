@@ -21,6 +21,7 @@ const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/;
 const DESCRIBES = /^-[A-Za-z]*[vV]/;
 const KEYWORDS = new Set(["if", "then", "elif", "else", "do", "while", "until", "!"]);
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+const SOURCES = new Set([".", "source"]);
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const HEREDOC = /<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1([^\n]*)\n(?:[^\n]*\n)*?[ \t]*\2[ \t]*(?:\n|$)/g;
 const MAX_NESTING = 3;
@@ -123,29 +124,42 @@ function foreignRead(tool: string, url: string): string {
 function shellRead(command: string, exempt: boolean, depth = 0): string {
   if (depth > MAX_NESTING) return "shell script too nested to check";
   const scripts: string[] = [];
-  let nested = exempt; // a variable set here reaches the scripts run from here
-  for (const { words, expands } of commandsOf(command.replace(HEREDOC, "$3\n"), scripts)) {
-    let i = 0;
-    let fed = false; // xargs appends operands the words do not show
-    let env = false; // a variable set for the run (PATH, HOME, a proxy) can move it
-    for (;;) {
-      for (; i < words.length && (ENV_ASSIGN.test(words[i]) || KEYWORDS.has(words[i])); i++) env ||= ENV_ASSIGN.test(words[i]);
-      const wrapper = program(words[i]);
-      if (!WRAPPERS.has(wrapper)) break;
-      if (wrapper === "xargs") fed = true;
-      for (i++; i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i])); i++) {
-        if (wrapper !== "command" || !DESCRIBES.test(words[i])) continue;
-        i = words.length; // nothing runs
-        break;
-      }
-    }
-    if (env) nested = false;
-    const plain = exempt && !fed && !env && !expands;
-    if (plain && program(words[i]) === "curl" && localCurl(words.slice(i + 1))) continue;
-    const found = downloaderAt(words, i, scripts);
+  const runs = commandsOf(command.replace(HEREDOC, "$3\n"), scripts).map(runOf);
+  // A sourced file can set a proxy for every curl here, as an export can.
+  const local = exempt && !runs.some(({ words, at }) => SOURCES.has(program(words[at])));
+  for (const { words, expands, at, fed, env } of runs) {
+    const plain = local && !fed && !env && !expands;
+    if (plain && program(words[at]) === "curl" && localCurl(words.slice(at + 1))) continue;
+    const found = downloaderAt(words, at, scripts);
     if (found) return `shell download: ${found}`;
   }
+  // A variable set here reaches the scripts run from here.
+  const nested = local && !runs.some((run) => run.env);
   return scripts.reduce((found, script) => found || shellRead(script, nested, depth + 1), "");
+}
+
+type Run = Command & { at: number; fed: boolean; env: boolean };
+
+// runOf finds the word a command runs, at. fed: under xargs, which appends
+// operands the words do not show; env: a variable set for the run (PATH,
+// HOME, a proxy) can move it.
+function runOf(command: Command): Run {
+  const { words } = command;
+  let i = 0;
+  let fed = false;
+  let env = false;
+  for (;;) {
+    for (; i < words.length && (ENV_ASSIGN.test(words[i]) || KEYWORDS.has(words[i])); i++) env ||= ENV_ASSIGN.test(words[i]);
+    const wrapper = program(words[i]);
+    if (!WRAPPERS.has(wrapper)) break;
+    if (wrapper === "xargs") fed = true;
+    for (i++; i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i])); i++) {
+      if (wrapper !== "command" || !DESCRIBES.test(words[i])) continue;
+      i = words.length; // nothing runs
+      break;
+    }
+  }
+  return { ...command, at: i, fed, env };
 }
 
 // downloaderAt names the downloader the command at s is, or ""; a script it

