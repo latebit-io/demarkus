@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,9 @@ type brand struct {
 	// MCPServerKey renames the memory MCP server (default "demarkus-memory"), so
 	// tools read mcp__plugin_<brand>_<key>__mark_*; mcp-serve --name tells the gates.
 	MCPServerKey string `json:"mcp_server_key"`
+	// TaintStrictness is the taint guard level the brand's users start from
+	// (default warn); the user's own setting still wins.
+	TaintStrictness string `json:"taint_strictness"`
 	// Manifest identity; each replaces the base plugin.json field when set and
 	// keeps the base's when not.
 	Author     *brandAuthor `json:"author"`
@@ -87,6 +91,9 @@ func decodeBrandsFile(raw []byte) (brandsFile, error) {
 	return spec, nil
 }
 
+// taintLevels are the values taint_strictness takes; "" keeps the default.
+var taintLevels = []string{"", "ask", "warn", "quiet", "off"}
+
 var pluginNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // harnessLayout names a base plugin's non-generated files: the manifest is
@@ -122,7 +129,7 @@ func validateBrands(spec *manifest) error {
 	names := map[string]struct{}{}
 	outputs := map[string]struct{}{}
 	// plugin_name is unique per harness; harnesses have separate marketplaces.
-	pluginNames := map[string]struct{}{}
+	pluginNames := map[string]*brand{}
 	for i := range spec.Brands {
 		b := &spec.Brands[i]
 		base, ok := targets[b.Base]
@@ -151,6 +158,9 @@ func validateBrands(spec *manifest) error {
 				return fmt.Errorf("brand %q: mcp_server_key must be lowercase letters, digits, and hyphens, other than %q", b.Name, defaultMCPServerKey)
 			}
 		}
+		if !slices.Contains(taintLevels, b.TaintStrictness) {
+			return fmt.Errorf("brand %q: taint_strictness %q must be ask, warn, quiet or off", b.Name, b.TaintStrictness)
+		}
 		if err := validateBrandIdentity(b); err != nil {
 			return fmt.Errorf("brand %q: %w", b.Name, err)
 		}
@@ -169,7 +179,23 @@ func validateBrands(spec *manifest) error {
 		}
 		names[b.Name] = struct{}{}
 		outputs[b.Output] = struct{}{}
-		pluginNames[pluginKey] = struct{}{}
+		pluginNames[pluginKey] = b
+	}
+	return validateSiblingTaint(spec.Brands, targets, pluginNames)
+}
+
+// validateSiblingTaint: sibling plugins hook the same writes, so two levels
+// would answer at random; unset is the binary's warn. byPlugin is keyed
+// harness/plugin_name.
+func validateSiblingTaint(brands []brand, targets map[string]*target, byPlugin map[string]*brand) error {
+	for i := range brands {
+		b := &brands[i]
+		for _, sibling := range []string{b.MemoryPluginName, b.KnowledgePluginName} {
+			other, ok := byPlugin[targets[b.Base].Harness+"/"+sibling]
+			if ok && cmp.Or(other.TaintStrictness, "warn") != cmp.Or(b.TaintStrictness, "warn") {
+				return fmt.Errorf("brand %q: taint_strictness %q differs from sibling %q (%q)", b.Name, b.TaintStrictness, other.Name, other.TaintStrictness)
+			}
+		}
 	}
 	return nil
 }
@@ -286,7 +312,7 @@ func brandArtifacts(root string, b *brand, base, t *target) ([]artifact, error) 
 	if err != nil {
 		return nil, fmt.Errorf("brand %s: %w", b.Name, err)
 	}
-	names, err := prettyJSON(brandNames{PluginName: t.PluginName, Store: t.Store})
+	names, err := prettyJSON(brandNames{PluginName: t.PluginName, Store: t.Store, TaintStrictness: b.TaintStrictness})
 	if err != nil {
 		return nil, fmt.Errorf("brand %s: %w", b.Name, err)
 	}
@@ -299,13 +325,16 @@ func brandArtifacts(root string, b *brand, base, t *target) ([]artifact, error) 
 }
 
 // brandNamesFile sits beside the static guidance; the binary reads it for
-// the words a branded plugin's status line uses. Base plugins ship none.
+// the words a branded plugin's status line uses and for its gate defaults.
+// Base plugins ship none.
 const brandNamesFile = "context/brand.json"
 
-// brandNames is the file's shape, mirrored by the binary's guidance package.
+// brandNames is the file's shape: the binary's guidance package reads the
+// names, its gate (config.BrandDefault) the taint level.
 type brandNames struct {
-	PluginName string `json:"plugin_name"`
-	Store      string `json:"store_noun"`
+	PluginName      string `json:"plugin_name"`
+	Store           string `json:"store_noun"`
+	TaintStrictness string `json:"taint_strictness,omitempty"`
 }
 
 // prettyJSON renders a generated JSON file: indented, trailing newline.
@@ -481,6 +510,14 @@ func brandReadme(b *brand, base, t *target) string {
 	if base.Surface == "memory" {
 		shared = fmt.Sprintf("the demarkus-plugin binary, the local memory (MCP server key %q), and the ~/.demarkus state", t.MCPServerKey)
 	}
+	taint := ""
+	if b.TaintStrictness != "" {
+		taint = fmt.Sprintf(`
+The taint guard (a write after the session read untrusted content) starts at
+%q here, not the upstream "warn". DEMARKUS_TAINT_STRICTNESS or
+~/.demarkus/plugin.taint-strictness (ask, warn, quiet, off) overrides it.
+`, b.TaintStrictness)
+	}
 	return fmt.Sprintf(`# %s
 
 %s
@@ -488,10 +525,10 @@ func brandReadme(b *brand, base, t *target) string {
 This plugin is generated from the %s plugin in the demarkus repository
 (source: %s). Prompts, hooks, and scripts are identical apart from the plugin
 name; it shares %s, so install it instead of, not alongside, %s.
-
+%s
 Regenerate after editing the templates, the base plugin, or the brand entry,
 from the tools/ directory of a demarkus checkout:
 
     go run ./plugin-prompts write [--brands <file>]
-`, b.PluginName, b.Description, base.PluginName, base.Output, shared, base.PluginName)
+`, b.PluginName, b.Description, base.PluginName, base.Output, shared, base.PluginName, taint)
 }

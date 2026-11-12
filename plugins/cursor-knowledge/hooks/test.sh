@@ -15,6 +15,7 @@ in="\$(cat)"
 case "\$1" in
   version) echo "${PIN}" ;;
   gate) [[ -z "\${FAKE_GATE_CRASH:-}" ]] || exit 3
+        echo "brand=\${DEMARKUS_BRAND_FILE:-}" >> "${CALLS}"
         echo '{"permission":"deny","user_message":"tags","agent_message":"tags"}' ;;
   guidance) echo '{"additional_context":"guidance"}' ;;
 esac
@@ -26,6 +27,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 out="$(echo '{"hook_event_name":"beforeMCPExecution","tool_name":"mark_publish","mcp_server_name":"acme","tool_input":{}}' | bash "${HERE}/gate.sh")"
 [[ "${out}" == '{"permission":"deny","user_message":"tags","agent_message":"tags"}' ]] || fail "gate output: ${out}"
 grep -q '^gate --format cursor$' "${CALLS}" || fail "gate flags wrong: $(cat "${CALLS}")"
+grep -q "^brand=${HERE}/../context/brand.json$" "${CALLS}" || fail "gate not pointed at the brand file: $(cat "${CALLS}")"
 
 # session-start: bootstrap is skipped when the binary exists; guidance is emitted on stdout only
 out="$(echo '{"hook_event_name":"sessionStart","conversation_id":"c"}' | bash "${HERE}/session-start.sh" 2>/dev/null)"

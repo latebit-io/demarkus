@@ -161,23 +161,34 @@ func classifySegment(tokens []string) (Check, bool) {
 	return "", false
 }
 
-// wrappers run the command after them, the TS adapters' set; true marks one
-// whose options and numeric values (timeout 10s, nice -n 5) come first.
-// command takes none: command -v curl runs nothing.
+// wrappers run the command after their options and numeric values (timeout
+// 10s, nice -n 5): the TS adapters' set.
 var wrappers = map[string]bool{"sudo": true, "doas": true, "env": true, "exec": true, "nohup": true, "time": true,
-	"nice": true, "timeout": true, "xargs": true, "stdbuf": true, "command": false}
+	"nice": true, "timeout": true, "xargs": true, "stdbuf": true, "command": true}
+
+// describes: command -v and -V (clustered too) name their operand, run nothing.
+var describes = regexp.MustCompile(`^-[A-Za-z]*[vV]`)
+
+// keywords precede a command and run nothing themselves: the TS adapters'
+// set, and the brace that opens a group.
+var keywords = map[string]bool{"if": true, "then": true, "elif": true, "else": true, "do": true, "while": true,
+	"until": true, "!": true, "{": true}
 
 // numericArg is a wrapper option value: 10, 2.5, 10s, 1m.
 var numericArg = regexp.MustCompile(`^\d[0-9.]*[smhd]?$`)
 
 // Runs names the first of programs some pipeline stage of command runs, or "":
-// quotes respected, env assignments and wrappers (sudo -E) skipped, a path
-// compared by its base name.
+// quotes respected, keywords, env assignments and wrappers (sudo -E) skipped,
+// a path compared by its base name, a quoted name read bare ('wget' is wget).
 func Runs(command string, programs ...[]string) string {
 	segs, _ := splitSegments(command)
 	for _, seg := range segs {
 		for _, stage := range append([]string{seg.stage}, seg.later...) {
-			tokens := commandWords(strings.Fields(stage))
+			tokens := strings.Fields(stage)
+			for i, t := range tokens {
+				tokens[i] = bare.Replace(t)
+			}
+			tokens = commandWords(tokens)
 			if i := slices.IndexFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) }); i >= 0 {
 				return strings.Join(programs[i], " ")
 			}
@@ -186,17 +197,31 @@ func Runs(command string, programs ...[]string) string {
 	return ""
 }
 
-// commandWords drops what precedes the command a stage runs: assignments,
-// wrappers and the wrappers' options.
+// bare drops what the shell drops from a name: quotes, backslashes, an
+// escaped newline.
+var bare = strings.NewReplacer("\\\n", "", "'", "", `"`, "", `\`, "")
+
+// commandWords drops what precedes the command a stage runs: keywords, a
+// subshell's parenthesis, assignments, wrappers and the wrappers' options.
 func commandWords(tokens []string) []string {
 	for len(tokens) > 0 {
-		takesOptions, wrapper := wrappers[filepath.Base(tokens[0])]
+		if t := strings.TrimLeft(tokens[0], "("); t != tokens[0] {
+			tokens = tokens[1:]
+			if t != "" {
+				tokens = append([]string{t}, tokens...)
+			}
+			continue
+		}
+		name := filepath.Base(tokens[0])
 		switch {
-		case isEnvAssignment(tokens[0]):
+		case keywords[tokens[0]] || isEnvAssignment(tokens[0]):
 			tokens = tokens[1:]
-		case wrapper:
+		case wrappers[name]:
 			tokens = tokens[1:]
-			for takesOptions && len(tokens) > 0 && (strings.HasPrefix(tokens[0], "-") || numericArg.MatchString(tokens[0])) {
+			for len(tokens) > 0 && (strings.HasPrefix(tokens[0], "-") || numericArg.MatchString(tokens[0])) {
+				if name == "command" && describes.MatchString(tokens[0]) {
+					return nil
+				}
 				tokens = tokens[1:]
 			}
 		default:
@@ -258,6 +283,11 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 	for i := 0; i < len(command); i++ {
 		c := command[i]
 		switch {
+		case escapes(command, i, quote):
+			// An escaped byte is part of its word: no separator, no quote.
+			i++
+			write(c)
+			write(command[i])
 		case quote != 0:
 			if c == quote {
 				quote = 0
@@ -288,6 +318,13 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 	}
 	flush()
 	return segs, andOnly
+}
+
+// escapes: the backslash at i escapes the next byte. Not inside single
+// quotes, and never a newline, which still splits: a backslash ending a
+// comment continues nothing, so the next line runs.
+func escapes(command string, i int, quote byte) bool {
+	return command[i] == '\\' && quote != '\'' && i+1 < len(command) && command[i+1] != '\n'
 }
 
 // isRedirect: the & at i belongs to a redirection (2>&1, <&3, &>file).

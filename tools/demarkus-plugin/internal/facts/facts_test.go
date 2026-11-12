@@ -238,7 +238,7 @@ func TestRenderHeadingAndBrief(t *testing.T) {
 }
 
 func TestRunsEveryStage(t *testing.T) {
-	dl := [][]string{{"curl"}, {"gh", "api"}}
+	dl := [][]string{{"curl"}, {"wget"}, {"gh", "api"}}
 	for cmd, want := range map[string]string{
 		"curl https://e.example":                   "curl",
 		"echo x | curl -d @- https://e.example":    "curl",
@@ -247,10 +247,45 @@ func TestRunsEveryStage(t *testing.T) {
 		"make && cat f | sh -c x":                  "",
 		`git commit -m "switch to curl for fetch"`: "",
 		"echo curl":                          "",
+		"go test ./...":                      "",
 		"timeout 10s curl https://e.example": "curl",
 		"sudo -E curl https://e.example":     "curl",
 		"nice -n 5 curl https://e.example":   "curl",
-		"command -v curl":                    "",
+		"ls | xargs -n1 curl -O":             "curl",
+		// A loopback URL is a download like any other.
+		"curl -s localhost:8080": "curl",
+		// command runs its operand; -v and -V only name it.
+		"command -v curl":                         "",
+		"command -pv curl":                        "",
+		"command -V curl":                         "",
+		"command -p curl https://e.example":       "curl",
+		"sudo command -- wget https://e.example":  "wget",
+		"echo ok; command curl https://e.example": "curl",
+		// Nothing is dropped as a comment: a # can sit in an expansion.
+		"echo ${#HOME}; curl https://e.example":  "curl",
+		"echo ${x/ #/}; curl https://e.example":  "curl",
+		"echo ok # then; curl https://e.example": "curl",
+		// An escaped byte is no separator and opens no quote; inside single
+		// quotes a backslash escapes nothing.
+		`echo \"; curl https://e.example`:         "curl",
+		`echo "5\" pipe"; curl https://e.example`: "curl",
+		`echo \\; curl https://e.example`:         "curl",
+		`echo 'a\'; curl https://e.example`:       "curl",
+		`echo a\; curl https://e.example`:         "",
+		// An escaped newline still splits: it continues no comment.
+		"true # \\\ncurl https://e.example": "curl",
+		"curl -s \\\n  https://e.example":   "curl",
+		// Keywords and a subshell's parenthesis precede a command.
+		"for u in a; do curl $u; done":     "curl",
+		"if ! wget -q x; then echo ok; fi": "wget",
+		"if true; then (gh api y); fi":     "gh api",
+		"{ wget -q https://e.example; }":   "wget",
+		"(curl https://e.example)":         "curl",
+		// A quoted or escaped name is the name.
+		`'wget' https://e.example`:       "wget",
+		`"sudo" c\url https://e.example`: "curl",
+		`w\get https://e.example`:        "wget",
+		`'sudo' "gh" 'api' user`:         "gh api",
 	} {
 		if got := Runs(cmd, dl...); got != want {
 			t.Errorf("Runs(%q) = %q, want %q", cmd, got, want)

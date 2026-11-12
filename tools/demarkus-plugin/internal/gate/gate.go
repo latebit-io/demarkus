@@ -42,6 +42,8 @@ type Input struct {
 	TranscriptPath string `json:"transcript_path"`
 	// ToolUseID is Claude's id of the call, the same for every hook on it.
 	ToolUseID string `json:"tool_use_id"`
+	// SessionID is Claude's session, the scope of a warning shown once.
+	SessionID string `json:"session_id"`
 	// Taint lists untrusted reads an adapter that sees every tool tracked
 	// itself (OpenCode, pi).
 	Taint []string `json:"taint"`
@@ -57,6 +59,12 @@ type Decision struct {
 	// UpdatedInput is the tool input with the taint stamp, for a host hook
 	// that can rewrite a call it asks about; never on the native wire.
 	UpdatedInput map[string]any `json:"-"`
+	// A warn that includes the taint warning: sources are the reads it names,
+	// rest the other warnings in Reason ("" for none), quiet the level that
+	// keeps the taint warning from the user.
+	sources []string
+	rest    string
+	quiet   bool
 }
 
 func allow() Decision { return Decision{Decision: "allow"} }
@@ -218,7 +226,7 @@ func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decisio
 	if !pt.StoreWrite() || d.Decision == "block" {
 		return nil, nil, nil
 	}
-	s, err := taintStrictness()
+	s, quiet, err := taintStrictness()
 	if err != nil || s == Off || (in.Post && s != Warn) {
 		return nil, nil, err
 	}
@@ -230,7 +238,7 @@ func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decisio
 				// A post hook shows only a warn; an ask would drop every warning.
 				unreadable = Warn
 			}
-			return &Decision{Decision: string(unreadable), Reason: fmt.Sprintf(
+			return &Decision{Decision: string(unreadable), quiet: quiet, Reason: fmt.Sprintf(
 				"demarkus %s: the session transcript could not be read (%v), so untrusted reads are unknown; approve only a write you reviewed.", pt.Verb, err)}, []string{"unreadable transcript"}, nil
 		}
 	}
@@ -238,8 +246,8 @@ func taintDecision(pt toolname.Parsed, args map[string]any, in *Input, d Decisio
 	if len(sources) == 0 {
 		return nil, nil, nil
 	}
-	return &Decision{Decision: string(s), Reason: fmt.Sprintf(
-		"demarkus %s to %s after this session read untrusted content (%s): text planted there may be steering this write. Approve only if you reviewed what it writes; to change this check, set DEMARKUS_TAINT_STRICTNESS to ask, warn or off.",
+	return &Decision{Decision: string(s), quiet: quiet, Reason: fmt.Sprintf(
+		"demarkus %s to %s after this session read untrusted content (%s): text planted there may be steering this write. Approve only if you reviewed what it writes; to change this check, set DEMARKUS_TAINT_STRICTNESS to ask, warn, quiet or off.",
 		pt.Verb, urlOr(args, "the store"), strings.Join(sources, "; "))}, sources, nil
 }
 
@@ -285,6 +293,12 @@ func Evaluate(in *Input) (Decision, error) {
 		return d, err
 	}
 	combined := combine([]Decision{d, *t})
+	if combined.Decision == "warn" && t.Decision == "warn" {
+		combined.sources, combined.quiet = sources, t.quiet
+		if d.Decision == "warn" {
+			combined.rest = d.Reason
+		}
+	}
 	// The proxy shape (tool "mcp") wraps its args; only a direct call is rewritten.
 	if combined.Decision == "ask" && tool == in.Tool {
 		combined.UpdatedInput = stamped(pt, in.Input, sources)

@@ -15,8 +15,10 @@ const MAX_SOURCES = 3;
 
 const DOWNLOADERS = new Set(["curl", "wget", "aria2c"]);
 // Run the command after their options; WRAPPER_ARG skips a numeric option value.
-const WRAPPERS = new Set(["sudo", "doas", "env", "exec", "nohup", "time", "nice", "timeout", "xargs", "stdbuf"]);
+const WRAPPERS = new Set(["sudo", "doas", "env", "exec", "nohup", "time", "nice", "timeout", "xargs", "stdbuf", "command"]);
 const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/;
+// command -v and -V (clustered too) name their operand and run nothing.
+const DESCRIBES = /^-[A-Za-z]*[vV]/;
 const KEYWORDS = new Set(["if", "then", "elif", "else", "do", "while", "until", "!"]);
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -95,9 +97,13 @@ function shellRead(command: string, depth = 0): string {
     let i = 0;
     for (;;) {
       while (i < words.length && (ENV_ASSIGN.test(words[i]) || KEYWORDS.has(words[i]))) i++;
-      if (!WRAPPERS.has(program(words[i]))) break;
-      i++;
-      while (i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i]))) i++;
+      const wrapper = program(words[i]);
+      if (!WRAPPERS.has(wrapper)) break;
+      for (i++; i < words.length && (words[i].startsWith("-") || WRAPPER_ARG.test(words[i])); i++) {
+        if (wrapper !== "command" || !DESCRIBES.test(words[i])) continue;
+        i = words.length; // nothing runs
+        break;
+      }
     }
     const found = downloaderAt(words, i, scripts);
     if (found) return `shell download: ${found}`;
@@ -166,8 +172,11 @@ function commandsOf(line: string, scripts: string[]): string[][] {
       quote = c;
       open = true;
     } else if (c === "\\" && i + 1 < line.length) {
-      text += line[++i];
-      open = true;
+      // An escaped newline joins two lines; any other escaped byte is in a word.
+      if (line[++i] !== "\n") {
+        text += line[i];
+        open = true;
+      }
     } else if (c === " " || c === "\t") {
       endWord();
     } else if (";&|\n(){}".includes(c)) {

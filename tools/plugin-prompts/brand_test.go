@@ -100,7 +100,8 @@ func TestRenderAllBrandsCursorBase(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "brands.json")
 	spec := `{"brands": [{"name": "acme-cursor", "base": "cursor-knowledge", "output": "plugins/brands/acme-cursor",
-		"plugin_name": "acme-knowledge", "memory_plugin_name": "acme-brain", "description": "Acme Knowledge."}]}`
+		"plugin_name": "acme-knowledge", "memory_plugin_name": "acme-brain", "description": "Acme Knowledge.",
+		"taint_strictness": "quiet"}]}`
 	if err := os.WriteFile(path, []byte(spec), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +112,14 @@ func TestRenderAllBrandsCursorBase(t *testing.T) {
 	outDir := filepath.Join(root, "plugins", "brands", "acme-cursor") + string(filepath.Separator)
 	seen := map[string]bool{}
 	for i := range artifacts {
-		if rel, ok := strings.CutPrefix(artifacts[i].Path, outDir); ok {
-			seen[filepath.ToSlash(rel)] = true
+		rel, ok := strings.CutPrefix(artifacts[i].Path, outDir)
+		if !ok {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		seen[rel] = true
+		if content := string(artifacts[i].Content); rel == brandNamesFile && !strings.Contains(content, `"taint_strictness": "quiet"`) {
+			t.Fatalf("brand.json lacks the taint level: %s", content)
 		}
 	}
 	for _, want := range []string{".cursor-plugin/plugin.json", "hooks/gate.sh", "scripts/bootstrap.sh", "README.md"} {
@@ -223,6 +230,45 @@ func TestBrandMCPConfigRenamesServerAndPassesName(t *testing.T) {
 		if _, err := brandMCPConfig([]byte(raw), "memory"); err == nil {
 			t.Fatalf("%s: expected an error", name)
 		}
+	}
+}
+
+func TestValidateBrandsTaintStrictness(t *testing.T) {
+	targets := []target{{Name: "claude-memory", Surface: "memory", Harness: "claude", PluginName: "demarkus-memory"}}
+	for level, ok := range map[string]bool{"": true, "ask": true, "warn": true, "quiet": true, "off": true, "OFF": false, "block": false, "none": false} {
+		b := brand{Name: "acme", Base: "claude-memory", Output: "plugins/brands/acme", PluginName: "acme", Description: "Acme.", TaintStrictness: level}
+		err := validateBrands(&manifest{Targets: targets, Brands: []brand{b}})
+		if ok != (err == nil) || (err != nil && !strings.Contains(err.Error(), "taint_strictness")) {
+			t.Errorf("taint_strictness %q: err = %v, want ok %v", level, err, ok)
+		}
+	}
+}
+
+// A memory brand and its knowledge sibling hook the same writes, so they
+// must start from one level; unrelated brands need not agree.
+func TestValidateBrandsSiblingsShareTaintStrictness(t *testing.T) {
+	targets := []target{
+		{Name: "claude-memory", Surface: "memory", Harness: "claude", PluginName: "demarkus-memory"},
+		{Name: "claude-knowledge", Surface: "knowledge", Harness: "claude", PluginName: "demarkus-knowledge"},
+	}
+	pair := func(memory, knowledge, link string) []brand {
+		return []brand{
+			{Name: "brain", Base: "claude-memory", Output: "plugins/brands/brain", PluginName: "acme-brain", Description: "A.", KnowledgePluginName: link, TaintStrictness: memory},
+			{Name: "know", Base: "claude-knowledge", Output: "plugins/brands/know", PluginName: "acme-knowledge", Description: "A.", TaintStrictness: knowledge},
+		}
+	}
+	if err := validateBrands(&manifest{Targets: targets, Brands: pair("off", "off", "acme-knowledge")}); err != nil {
+		t.Errorf("siblings at one level: %v", err)
+	}
+	if err := validateBrands(&manifest{Targets: targets, Brands: pair("off", "", "acme-knowledge")}); err == nil || !strings.Contains(err.Error(), "differs from sibling") {
+		t.Errorf("siblings at two levels: err = %v", err)
+	}
+	// Unset is warn at run time, so the two agree.
+	if err := validateBrands(&manifest{Targets: targets, Brands: pair("warn", "", "acme-knowledge")}); err != nil {
+		t.Errorf("warn beside an unset sibling: %v", err)
+	}
+	if err := validateBrands(&manifest{Targets: targets, Brands: pair("off", "", "")}); err != nil {
+		t.Errorf("unlinked brands at two levels: %v", err)
 	}
 }
 
@@ -561,6 +607,14 @@ func TestBrandReadmeMentionsMCPKeyForMemoryOnly(t *testing.T) {
 	}
 	if strings.Contains(text, "cd tools") {
 		t.Fatalf("README regen line assumes the demarkus checkout is the cwd:\n%s", text)
+	}
+	if strings.Contains(text, "taint guard") {
+		t.Fatalf("README names a taint level the brand does not set:\n%s", text)
+	}
+	b.TaintStrictness = "off"
+	if text := brandReadme(b, memory, brandTarget(b, memory)); !strings.Contains(text, `starts at
+"off" here`) || !strings.Contains(text, "DEMARKUS_TAINT_STRICTNESS") {
+		t.Fatalf("README hides the brand's taint level:\n%s", text)
 	}
 }
 

@@ -27,12 +27,28 @@ test("taintOf finds a download only where the shell runs one", () => {
     ["ls | xargs -n1 curl -O", "curl"], ["x=$(curl -s https://x)", "curl"], ["echo \"$(wget -O- https://x)\"", "wget"],
     ["echo `curl https://x`", "curl"], ["bash -c 'curl https://x'", "curl"], ["sh -lc \"gh api user\"", "gh api"],
     ["eval \"curl https://x\"", "curl"], ["(curl https://x)", "curl"], ["if curl -sf https://x; then echo ok; fi", "curl"],
+    ["curl$(:) https://x", "curl"], ["cu`:`rl https://x", "curl"], ["gh api$(:) user", "gh api"],
+    // A loopback URL is a download like any other.
+    ["curl -s localhost:8080", "curl"], ["bash -c 'curl http://localhost'", "curl"], ["cat <(wget -qO- https://x)", "wget"],
+    // command runs its operand; -v and -V only name it.
+    ["command -p curl https://x", "curl"], ["echo ok; command curl https://x", "curl"], ["sudo command -- wget https://x", "wget"],
+    // An escaped newline joins two lines.
+    ["curl -s \\\n  https://x", "curl"], ["sudo \\\n  wget https://x", "wget"],
+    // An escaped quote opens no quote.
+    ["echo \\\"; curl https://x", "curl"], ["echo \"5\\\" pipe\"; curl https://x", "curl"], ["echo 'a\\'; curl https://x", "curl"],
+    // Nothing is dropped as a comment: a # can sit in an expansion.
+    ["echo ${#HOME}; curl https://x", "curl"], ["echo {#,}; curl https://x", "curl"], ["echo ${x/ #/}; curl https://x", "curl"],
+    ["echo ok # then; curl https://x", "curl"], ["echo ok # $(curl https://x)", "curl"],
+    ["for u in a b; do curl https://x/$u; done", "curl"], ["{ wget -q https://x; }", "wget"],
+    ["'wget' https://x", "wget"], ["w\\get https://x", "wget"], ["'sudo' \"gh\" 'api' user", "gh api"],
   ];
   for (const [command, program] of runs) assert.equal(taintOf("bash", { command }), `shell download: ${program}`, command);
   const mentions = [
     'git commit -m "switch to curl for fetch"', "git commit -m \"$(cat <<'EOF'\ncurl is now the fetcher\nEOF\n)\"",
     "cat <<EOF > get.sh\ncurl https://x\nEOF", "grep -rn curl .", "rg 'wget' src", "echo curl", "echo '$(curl https://x)'",
-    "brew install curl", "sudo apt-get install -y curl wget", "command -v curl", "man wget", "gh pr view 1",
+    "brew install curl", "sudo apt-get install -y curl wget", "command -v curl", "command -pv curl", "command -V wget", "man wget", "gh pr view 1",
+    "# curl https://x", "echo ok # curl https://x",
+    "echo a\\; curl b", "echo '{' curl https://x '}'", "jq '{a: .b}' f.json",
   ];
   for (const command of mentions) assert.equal(taintOf("bash", { command }), "", command);
 });

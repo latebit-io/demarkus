@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -96,6 +97,44 @@ func Knob(env, file string) (string, error) {
 		return "", err
 	}
 	return readTrimmed(p)
+}
+
+// Brand is a branded plugin's context/brand.json, as the generator writes it
+// (tools/plugin-prompts brandNames): the status line's words, gate defaults.
+type Brand struct {
+	PluginName      string `json:"plugin_name"`
+	Store           string `json:"store_noun"`
+	TaintStrictness string `json:"taint_strictness"`
+}
+
+// BrandFileEnv names the brand.json a plugin's gate hooks point at.
+const BrandFileEnv = "DEMARKUS_BRAND_FILE"
+
+// ReadBrand overlays the brand file at p onto b. A key it lacks keeps b's
+// value, and so does a missing file: a base plugin ships none.
+func ReadBrand(p string, b *Brand) error {
+	// Not readRaw: gosec follows the hook's env path into it (G703), and the
+	// waiver belongs here, where whoever sets the path could set the knob.
+	raw, err := os.ReadFile(p) //nolint:gosec // see above
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read brand.json: %w", err)
+	}
+	if err := json.Unmarshal(raw, b); err != nil {
+		return fmt.Errorf("parse brand.json %s: %w", p, err)
+	}
+	return nil
+}
+
+// HookBrand is the brand of the plugin whose gate hook is running; zero for
+// a base plugin.
+func HookBrand() (b Brand, err error) {
+	if p := os.Getenv(BrandFileEnv); p != "" {
+		err = ReadBrand(p, &b)
+	}
+	return b, err
 }
 
 // IsOff reports a knob value that turns its feature off.

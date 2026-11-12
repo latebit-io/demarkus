@@ -12,6 +12,7 @@ printf '%s\n' "\$*" >> "${CALLS}"
 in="\$(cat)"
 case "\$1" in
   gate) [[ -z "\${FAKE_GATE_CRASH:-}" ]] || exit 3
+        echo "brand=\${DEMARKUS_BRAND_FILE:-}" >> "${CALLS}"
         echo '{"permission":"allow","agent_message":"warned"}' ;;
   nudge) case "\$*" in *session-end*) echo '{"followup_message":"journal?"}' ;; *) echo '{"permission":"allow","agent_message":"promote?"}' ;; esac ;;
   guidance) echo '{"additional_context":"guidance"}' ;;
@@ -69,6 +70,7 @@ printf '{"hook_event_name":"sessionEnd","conversation_id":"%s","reason":"closed"
 out="$(echo '{"hook_event_name":"beforeMCPExecution","tool_name":"mark_publish","mcp_server_name":"demarkus-memory","tool_input":{}}' | bash "${HERE}/gate.sh")"
 [[ "${out}" == '{"permission":"allow","agent_message":"warned"}' ]] || fail "gate output: ${out}"
 grep -q '^gate --format cursor$' "${CALLS}" || fail "gate flags wrong"
+grep -q "^brand=${HERE}/../context/brand.json$" "${CALLS}" || fail "gate not pointed at the brand file: $(cat "${CALLS}")"
 out="$(echo '{"hook_event_name":"beforeMCPExecution","tool_name":"mark_publish"}' | bash "${HERE}/promote-nudge.sh")"
 [[ "${out}" == '{"permission":"allow","agent_message":"promote?"}' ]] || fail "promote output: ${out}"
 grep -q '^nudge --event promote --format cursor$' "${CALLS}" || fail "promote flags wrong"

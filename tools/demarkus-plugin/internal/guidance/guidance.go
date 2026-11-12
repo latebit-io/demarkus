@@ -5,7 +5,6 @@ package guidance
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -38,36 +37,20 @@ type Output struct {
 	Status  string `json:"status,omitempty"` // one line for the user; empty = nothing to show
 }
 
-// brandNames are the words a plugin's status line uses. The generator writes
-// context/brand.json beside a brand's guidance file; the base plugins have
-// none and keep the demarkus words in baseBrand.
-type brandNames struct {
-	PluginName string `json:"plugin_name"`
-	Store      string `json:"store_noun"`
-}
-
-var baseBrand = map[string]brandNames{
+// baseBrand holds the words a base plugin's status line uses; a brand's
+// context/brand.json beside its guidance file replaces them.
+var baseBrand = map[string]config.Brand{
 	"memory":    {PluginName: "demarkus", Store: "soul"},
 	"knowledge": {PluginName: "demarkus-knowledge", Store: "soul"},
 }
 
-func readBrand(surface, guidanceFile string) (brandNames, error) {
+func readBrand(surface, guidanceFile string) (config.Brand, error) {
 	b := baseBrand[surface]
 	if guidanceFile == "" {
 		return b, nil
 	}
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(guidanceFile), "brand.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return b, nil
-	}
-	if err != nil {
-		return brandNames{}, fmt.Errorf("read brand names: %w", err)
-	}
-	// Absent keys keep the base words.
-	if err := json.Unmarshal(raw, &b); err != nil {
-		return brandNames{}, fmt.Errorf("parse brand.json: %w", err)
-	}
-	return b, nil
+	err := config.ReadBrand(filepath.Join(filepath.Dir(guidanceFile), "brand.json"), &b)
+	return b, err
 }
 
 // memoryOfferText follows the plugin name on the status line, never in agent
@@ -141,7 +124,7 @@ func memory(in Input) (Output, error) {
 // projectHeader states the project, its root, state and where the work stands
 // for the agent; status is the user's line. Both are empty without a project
 // directory, or when an unbound project would name an unconfigured local store.
-func projectHeader(dir, warn string, brand brandNames) (header, status string, err error) {
+func projectHeader(dir, warn string, brand config.Brand) (header, status string, err error) {
 	r, err := ResolveProject(dir)
 	if errors.Is(err, project.ErrNoDir) {
 		return "", "", nil
@@ -166,7 +149,7 @@ func projectHeader(dir, warn string, brand brandNames) (header, status string, e
 var serverHealthWarning = provision.HealthWarning
 
 // memoryOffer returns the one-time offer text the first time, "" thereafter.
-func memoryOffer(brand brandNames) (string, error) {
+func memoryOffer(brand config.Brand) (string, error) {
 	sentinel, err := config.StatePath(".memory-offer-shown")
 	if err != nil {
 		return "", err
