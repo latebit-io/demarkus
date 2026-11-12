@@ -16,6 +16,11 @@ var loopbackURL = regexp.MustCompile(`(?i)^(?:https?://)?(?:localhost|127\.0\.0\
 // next word, an operand like any other: not a loopback URL, so not exempt.
 var redirection = regexp.MustCompile(`^(?:\d*|&)[<>]`)
 
+// Ways a command sends a loopback curl elsewhere with nothing in its
+// arguments to show it: a proxy variable, a curlrc home, a function or alias
+// named curl. Matched anywhere in the command, quoted or not.
+var rerouted = regexp.MustCompile(`(?i)\b(?:(?:https?|all|no)_proxy|curl_home)\b|\bcurl\s*\(\s*\)|\bfunction\s+curl\b|\balias\s+(?:-\w+\s+)*curl=`)
+
 // curl options that leave the request on the named host. Anything else
 // (-L, --proxy, -K, --connect-to, --resolve, --url) is not vouched for.
 const (
@@ -35,8 +40,9 @@ var curlLong = map[string]bool{ // true: takes a value
 // loopback URL, every option a known one. curl alone: it follows no redirect
 // unasked, wget and aria2c do. taint.ts localCurl is the same rule.
 func localCurl(r facts.Run) bool {
-	// An expansion anywhere: the words are not what curl gets.
-	if r.Program != "curl" || r.Fed || slices.ContainsFunc(r.Args, func(w string) bool { return strings.ContainsAny(w, "$`") }) {
+	// A variable set for the run (PATH, HOME, a proxy) can move it; an
+	// expansion anywhere means the words are not what curl gets.
+	if r.Program != "curl" || r.Fed || r.Env || slices.ContainsFunc(r.Args, func(w string) bool { return strings.ContainsAny(w, "$`") }) {
 		return false
 	}
 	urls := 0

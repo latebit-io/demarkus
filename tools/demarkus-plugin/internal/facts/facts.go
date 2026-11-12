@@ -175,6 +175,7 @@ type Run struct {
 	Program string   // as listed: "curl", "gh api"
 	Args    []string // the words after it, unquoted; nil when a quote is unclosed
 	Fed     bool     // under xargs, which appends operands the stage does not show
+	Env     bool     // the stage assigns variables for it: X=1 curl, env X=1 curl
 }
 
 // Runs lists the programs the stages of command run, in order: quotes
@@ -185,26 +186,28 @@ func Runs(command string, programs ...[]string) []Run {
 	segs, _ := splitSegments(command)
 	for _, seg := range segs {
 		for _, stage := range append([]string{seg.stage}, seg.later...) {
-			tokens, fed := commandWords(strings.Fields(stage))
+			tokens, fed, env := commandWords(strings.Fields(stage))
 			i := slices.IndexFunc(programs, func(p []string) bool { return hasPrefix(tokens, p) })
 			if i < 0 {
 				continue
 			}
 			p := programs[i]
-			runs = append(runs, Run{Program: strings.Join(p, " "), Args: words(strings.Join(tokens[len(p):], " ")), Fed: fed})
+			runs = append(runs, Run{Program: strings.Join(p, " "), Args: words(strings.Join(tokens[len(p):], " ")), Fed: fed, Env: env})
 		}
 	}
 	return runs
 }
 
 // commandWords drops what precedes the command a stage runs: assignments,
-// wrappers and the wrappers' options. fed: one of the wrappers was xargs.
-func commandWords(tokens []string) (rest []string, fed bool) {
+// wrappers and the wrappers' options. fed: one of the wrappers was xargs;
+// env: an assignment was dropped.
+func commandWords(tokens []string) (rest []string, fed, env bool) {
 	for len(tokens) > 0 {
 		name := filepath.Base(tokens[0])
 		takesOptions, wrapper := wrappers[name]
 		switch {
 		case isEnvAssignment(tokens[0]):
+			env = true
 			tokens = tokens[1:]
 		case wrapper:
 			fed = fed || name == "xargs"
@@ -213,10 +216,10 @@ func commandWords(tokens []string) (rest []string, fed bool) {
 				tokens = tokens[1:]
 			}
 		default:
-			return tokens, fed
+			return tokens, fed, env
 		}
 	}
-	return tokens, fed
+	return tokens, fed, env
 }
 
 // words splits s into shell words, quotes and backslashes removed; nil for
@@ -297,7 +300,8 @@ type segment struct {
 }
 
 // splitSegments splits on &&, ||, ;, & and newlines outside quotes, so a check
-// named inside a commit message is not a check, and a quoted | is no pipe.
+// named inside a commit message is not a check, and a quoted | is no pipe. A
+// comment (# starting a word) is dropped to its line's end: it runs nothing.
 // andOnly: every separator was && (a background & never is: Bash returns first).
 func splitSegments(command string) (segs []segment, andOnly bool) {
 	andOnly = true
@@ -327,6 +331,10 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 		case c == '\'' || c == '"':
 			quote = c
 			write(c)
+		case c == '#' && wordStart(cur.String()):
+			for i+1 < len(command) && command[i+1] != '\n' {
+				i++
+			}
 		case c == ';' || c == '\n':
 			// A trailing ; or newline ends the command; it sequences nothing.
 			andOnly = andOnly && strings.TrimSpace(command[i+1:]) == ""
@@ -349,6 +357,11 @@ func splitSegments(command string) (segs []segment, andOnly bool) {
 	}
 	flush()
 	return segs, andOnly
+}
+
+// wordStart: the next byte begins a word of the stage written so far.
+func wordStart(stage string) bool {
+	return stage == "" || stage[len(stage)-1] == ' ' || stage[len(stage)-1] == '\t'
 }
 
 // isRedirect: the & at i belongs to a redirection (2>&1, <&3, &>file).

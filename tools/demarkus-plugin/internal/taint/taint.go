@@ -58,8 +58,10 @@ func Of(c *Call, memoryID func(tool string) string) string {
 		return "web-fetch agent"
 	case c.Name == "Bash":
 		// The program only: its arguments carry URLs and tokens.
-		for _, r := range facts.Runs(c.Input.Command, downloaders...) {
-			if !localCurl(r) {
+		runs := facts.Runs(c.Input.Command, downloaders...)
+		exempt := len(runs) > 0 && !rerouted.MatchString(c.Input.Command)
+		for _, r := range runs {
+			if !exempt || !localCurl(r) {
 				return "shell download: " + r.Program
 			}
 		}
