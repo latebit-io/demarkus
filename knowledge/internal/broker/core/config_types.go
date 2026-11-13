@@ -341,7 +341,7 @@ type FederationConfig struct {
 }
 
 // DriftReportConfig has one replica audit each knowledge world served in
-// process and write its drift report (protocol.DriftReportPath). Off by
+// process and write its drift report (driftreport.Path). Off by
 // default: a pass reads every document of every world.
 type DriftReportConfig struct {
 	Enabled bool `yaml:"enabled"`

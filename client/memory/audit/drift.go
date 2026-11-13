@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/provenance"
 )
 
@@ -31,11 +32,17 @@ func Drift(ctx context.Context, store Store, opts Options) (*Report, error) {
 	return &Report{Scope: a.opts.Scope, Documents: len(a.order), Freshness: a.fresh, Findings: a.findings, Coverage: a.coverage}, nil
 }
 
+// unjudged reports the status of a read that failed or never ran: the
+// document is unknown, not gone.
+func unjudged(status string) bool {
+	return status != protocol.StatusOK && status != protocol.StatusNotFound && status != protocol.StatusArchived
+}
+
 // checkDrift compares each pin on a document in this store with its current
 // version: a source past its pin may leave the pinning document stale. Pins
 // on other stores, repositories or the web need a reader this audit lacks.
 func (a *audit) checkDrift() {
-	outside := 0
+	outside, unread := 0, 0
 	var behind []int
 	for _, p := range a.order {
 		d := a.docs[p]
@@ -69,6 +76,8 @@ func (a *audit) checkDrift() {
 			switch {
 			case !inventoried && !strings.HasPrefix(target, a.opts.Scope):
 				outside++
+			case inventoried && unjudged(source.status):
+				unread++
 			case !inventoried || !live(source.status):
 				a.fresh.PinsChecked++
 				a.add(CheckDrift, p, "based on "+target+", which is not a live document here", "pin the document that replaced it, or drop the pin")
@@ -106,5 +115,8 @@ func (a *audit) checkDrift() {
 	}
 	if outside > 0 {
 		a.note("%d %s pins on documents outside the scope not checked for drift", outside, provenance.Key)
+	}
+	if unread > 0 {
+		a.note("%d %s pins on documents that could not be read not checked for drift", unread, provenance.Key)
 	}
 }

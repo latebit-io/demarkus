@@ -75,6 +75,16 @@ tests:
           path: rules[0].resourceNames
           value: ["demarkus-broker-sweeper", "demarkus-drift-report"]
 
+  - it: names the broker's default drift Lease when the value is blank
+    documentIndex: 0
+    set:
+      broker.driftReport.enabled: true
+      broker.driftReport.leaseName: ""
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value: ["demarkus-broker-sweeper", "demarkus-drift-report"]
+
   - it: names the federation Lease for the world marked hub
     documentIndex: 0
     set:

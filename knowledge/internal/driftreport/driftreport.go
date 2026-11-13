@@ -25,18 +25,24 @@ import (
 )
 
 const (
+	// Path is the report's place in every world: an ordinary document.
+	Path = "/reports/drift.md"
 	// retention keeps the recent reports: the trend, not an archive.
 	retention = 30
 	// readsPerSecond paces a pass well under the limiter the worlds share
 	// with every in-process caller, the federation deriver among them.
 	readsPerSecond = 5
 	auditTimeout   = time.Hour
+	// maxFindingBytes and maxCoverageNotes bound the report under the
+	// protocol's body limit; the freshness totals always fit.
+	maxFindingBytes  = protocol.MaxBodyLength / 2
+	maxCoverageNotes = 20
 
 	summary = "Documents in this world whose pinned sources moved, by owner; generated on a schedule, so edits are overwritten."
 )
 
 // Grant is the write access a report is published under: its own path.
-var Grant = protocol.Grant{Label: "drift-report", Paths: []string{protocol.DriftReportPath}}
+var Grant = protocol.Grant{Label: "drift-report", Paths: []string{Path}}
 
 // Store reads the worlds by name with no token, which in process passes a
 // world's gate, and writes each report.
@@ -105,14 +111,14 @@ func (r *reporter) report(ctx context.Context, world string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	found, err := audit.Drift(ctx, &audit.ClientStore{Client: r.Store, Host: world}, audit.Options{Scope: "/", Floor: floor, Timeout: auditTimeout})
+	found, err := audit.Drift(ctx, &audit.ClientStore{Client: r.Store, Host: world}, audit.Options{Scope: "/", Floor: floor, Timeout: auditTimeout, Skip: []string{Path}})
 	if err != nil {
 		return "", fmt.Errorf("audit: %w", err)
 	}
 	meta := generation.ArtifactMetadata("demarkus-drift", retention)
 	meta["tags"], meta["importance"], meta["description"] = "drift,freshness,report", "0.3", summary
 	body := Render(found)
-	doc := docwrite.Doc{Backend: r.Store, Host: world, Path: protocol.DriftReportPath, Write: func(ctx context.Context, op docwrite.WriteOp) (fetch.Result, error) {
+	doc := docwrite.Doc{Backend: r.Store, Host: world, Path: Path, Write: func(ctx context.Context, op docwrite.WriteOp) (fetch.Result, error) {
 		return op(protocol.WithGrant(ctx, Grant), "")
 	}}
 	result, written, err := doc.Edit(ctx, nil, func(head *docwrite.Head) (docwrite.Write, bool, error) {
@@ -120,7 +126,7 @@ func (r *reporter) report(ctx context.Context, world string) (string, error) {
 	})
 	switch status := result.Response.Status; {
 	case err != nil:
-		return "", fmt.Errorf("publish %s: %w", protocol.DriftReportPath, err)
+		return "", fmt.Errorf("publish %s: %w", Path, err)
 	case written:
 		return fmt.Sprintf("published, %d documents drifted", found.Freshness.DocumentsDrifted), nil
 	case status == protocol.StatusArchived:
@@ -128,7 +134,7 @@ func (r *reporter) report(ctx context.Context, world string) (string, error) {
 	case status == protocol.StatusOK:
 		return "unchanged", nil
 	}
-	return "", fmt.Errorf("publish %s: %s", protocol.DriftReportPath, result.Response.Refusal())
+	return "", fmt.Errorf("publish %s: %s", Path, result.Response.Refusal())
 }
 
 // floorPolicy reads the floor world's policy, as the tools do, so the report
@@ -148,18 +154,19 @@ func (r *reporter) floorPolicy(ctx context.Context, world string) (*publishpolic
 }
 
 // Render is the report document: the freshness baseline, then each drifted
-// document under its owner. It carries no date, so an unchanged world
-// renders the same body and writes no version.
+// document under its owner, up to maxFindingBytes. It carries no date, so
+// an unchanged world renders the same body and writes no version.
 func Render(r *audit.Report) string {
 	var b strings.Builder
 	b.WriteString("# Drift report\n\n" + summary + "\n\n## Freshness\n\n")
 	for _, line := range r.Freshness.Lines() {
 		b.WriteString("- " + line + "\n")
 	}
-	byOwner := map[string][]audit.Finding{}
+	byOwner, total := map[string][]audit.Finding{}, 0
 	for _, f := range r.Findings {
 		if f.Check == audit.CheckDrift {
 			byOwner[f.Owner] = append(byOwner[f.Owner], f)
+			total++
 		}
 	}
 	owners := slices.Sorted(maps.Keys(byOwner))
@@ -168,20 +175,34 @@ func Render(r *audit.Report) string {
 	} else if owners[0] == "" {
 		owners = append(owners[1:], "") // the documents nobody owns last
 	}
+	shown, limit := 0, b.Len()+maxFindingBytes
 	for _, o := range owners {
+		if b.Len() >= limit {
+			break
+		}
 		heading := "Owner: " + o
 		if o == "" {
 			heading = "No owner"
 		}
 		b.WriteString("\n## " + heading + "\n\n")
 		for _, f := range byOwner[o] {
+			if b.Len() >= limit {
+				break
+			}
 			fmt.Fprintf(&b, "- `%s`: %s\n", f.Path, f.Detail)
+			shown++
 		}
+	}
+	if shown < total {
+		fmt.Fprintf(&b, "\n%d more findings are not shown; the doctor on a directory lists them.\n", total-shown)
 	}
 	if len(r.Coverage) > 0 {
 		b.WriteString("\n## Coverage\n\nThe audit was partial:\n\n")
-		for _, note := range r.Coverage {
+		for _, note := range r.Coverage[:min(len(r.Coverage), maxCoverageNotes)] {
 			b.WriteString("- " + note + "\n")
+		}
+		if more := len(r.Coverage) - maxCoverageNotes; more > 0 {
+			fmt.Fprintf(&b, "- and %d more\n", more)
 		}
 	}
 	return b.String()

@@ -443,6 +443,8 @@ version, and the report keeps its last 30. The report is an ordinary
 write: a world whose `policy.md` requires tag axes or fields refuses it
 until that policy lists `exempt: /reports/**`, and the broker logs the
 refusal each pass. Archive a world's report to opt that world out.
+The report is a document like any other to `mark_doctor`: link
+`/reports/` from the world's hub, or it lists as an orphan.
 
 Federation: with a hub, `broker.federation.hub` or else the world marked
 `hub: true`, one replica (Lease

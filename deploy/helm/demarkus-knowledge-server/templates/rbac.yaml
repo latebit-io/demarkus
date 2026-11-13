@@ -19,7 +19,7 @@ rules:
       - {{ .Values.broker.federation.leaseName | quote }}
       {{- end }}
       {{- if .Values.broker.driftReport.enabled }}
-      - {{ .Values.broker.driftReport.leaseName | quote }}
+      - {{ .Values.broker.driftReport.leaseName | default "demarkus-drift-report" | quote }}
       {{- end }}
     verbs: ["get", "update"]
   - apiGroups: ["coordination.k8s.io"]

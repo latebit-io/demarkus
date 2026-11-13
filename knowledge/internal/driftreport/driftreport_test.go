@@ -2,6 +2,7 @@ package driftreport
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -41,7 +42,7 @@ func publish(t *testing.T, store *dispatch.Composite, user, docPath, body string
 
 func fetchReport(t *testing.T, store *dispatch.Composite) fetch.Result {
 	t.Helper()
-	res, err := store.Fetch(context.Background(), fetch.FetchRequest{Host: world, Path: protocol.DriftReportPath})
+	res, err := store.Fetch(context.Background(), fetch.FetchRequest{Host: world, Path: Path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,5 +115,27 @@ func TestRenderGroupsByOwner(t *testing.T) {
 		"\n## Coverage\n\nThe audit was partial:\n\n- fetch /x.md failed: timeout\n"
 	if got != want {
 		t.Errorf("render:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// A world of drifted documents still fits the protocol's body limit: the
+// findings stop at the bound and the rest are counted.
+func TestRenderBoundsTheBody(t *testing.T) {
+	const count = 20000
+	findings := make([]audit.Finding, count)
+	for i := range findings {
+		findings[i] = audit.Finding{Check: audit.CheckDrift, Path: fmt.Sprintf("/notes/a-long-enough-document-name-%05d.md", i), Detail: "based on /adr/a-source.md, which is at v9, past the pinned v1", Owner: fmt.Sprintf("user-%d@example.com", i%50)}
+	}
+	coverage := make([]string, 100)
+	for i := range coverage {
+		coverage[i] = fmt.Sprintf("fetch /x-%d.md failed: timeout", i)
+	}
+	got := Render(&audit.Report{Findings: findings, Coverage: coverage})
+	shown := strings.Count(got, "\n- `/notes/")
+	if len(got) > protocol.MaxBodyLength || shown == 0 || shown >= count {
+		t.Fatalf("report is %d bytes with %d of %d findings, want some shown under %d bytes", len(got), shown, count, protocol.MaxBodyLength)
+	}
+	if want := fmt.Sprintf("\n%d more findings are not shown; the doctor on a directory lists them.\n", count-shown); !strings.Contains(got, want) || !strings.Contains(got, "- and 80 more\n") {
+		t.Errorf("report lacks %q or the capped coverage notes", want)
 	}
 }

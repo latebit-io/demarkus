@@ -63,6 +63,8 @@ type Options struct {
 	// Floor is the policy the store's own policy is merged over (the floor
 	// world's, behind a knowledge broker); nil means none.
 	Floor *publishpolicy.Policy
+	// Skip names documents the audit leaves out: the caller's own output.
+	Skip []string
 }
 
 // Finding is one report line: the document, what is wrong, and the fix.

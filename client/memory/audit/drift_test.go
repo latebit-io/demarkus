@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,11 +17,12 @@ func TestDriftChecks(t *testing.T) {
 		"/notes/r.md":     {Body: "# R\n\nSummary of R.\n", Meta: map[string]string{"tags": "notes", "user": "alice", "rel-based-on": "../adr/a.md/v3, mark://kb/adr/a.md/v5, /adr/a.md/v9, /gone.md/v1"}},
 		"/notes/old.md":   {Body: "# Old\n\nSummary of Old.\n", Meta: map[string]string{"tags": "notes", "user": "bob", "owner": "team-docs", "rel-based-on": "/adr/a.md/v5, https://github.com/o/r/commit/abcdef0, mark://elsewhere/x.md/v1"}},
 		"/notes/scope.md": {Body: "# S\n\nSummary of S.\n", Meta: map[string]string{"tags": "notes", "rel-based-on": "/adr/a.md/v1"}},
-		// The scheduled report is an audit's output: no document, no finding, no count.
-		protocol.DriftReportPath: {Body: "no heading — nobody links here\n", Meta: map[string]string{"rel-based-on": "/adr/a.md/v1"}},
+		// A caller's own output, skipped: no document, no finding, no count.
+		"/reports/out.md": {Body: "no heading — nobody links here\n", Meta: map[string]string{"rel-based-on": "/adr/a.md/v1"}},
 	})
 	f.host = "kb"
-	r, err := Run(context.Background(), f, Options{Scope: "/"})
+	skip := []string{"/reports/out.md"}
+	r, err := Run(context.Background(), f, Options{Scope: "/", Skip: skip})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +39,7 @@ func TestDriftChecks(t *testing.T) {
 		t.Errorf("coverage = %q, want none: repository and other-world pins are by design", r.Coverage)
 	}
 	// The drift-only audit counts and finds what the full one does.
-	only, err := Drift(context.Background(), f, Options{Scope: "/"})
+	only, err := Drift(context.Background(), f, Options{Scope: "/", Skip: skip})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,5 +116,26 @@ func TestOwnerPrefersTheOwnerKey(t *testing.T) {
 		if got := ownerOf(meta); got != want {
 			t.Errorf("owner(%v) = %q, want %q", meta, got, want)
 		}
+	}
+}
+
+// A source whose read failed is unknown, not gone: no finding, a coverage note.
+func TestDriftLeavesAnUnreadSourceUnjudged(t *testing.T) {
+	f := newFake(map[string]fakeDoc{
+		"/index.md": {Body: "# Hub\n\n- [a](/a.md)\n- [s](/s.md)\n- [g](/g.md)\n", Meta: map[string]string{"tags": "hub"}},
+		"/s.md":     {Status: protocol.StatusServerError},
+		"/a.md":     {Body: "# A\n\nSummary of A.\n", Meta: map[string]string{"tags": "a", "rel-based-on": "/s.md/v1, /gone.md/v1"}},
+	})
+	r, err := Drift(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckDrift); len(got) != 1 || got[0] != "/a.md: based on /gone.md, which is not a live document here" {
+		t.Errorf("drift findings = %q, want only the source that is gone", got)
+	}
+	if r.Freshness.PinsChecked != 1 || !slices.ContainsFunc(r.Coverage, func(c string) bool {
+		return strings.HasPrefix(c, "1 rel-based-on pins on documents that could not be read")
+	}) {
+		t.Errorf("pins checked = %d, coverage = %q; want one checked and the unread pin noted", r.Freshness.PinsChecked, r.Coverage)
 	}
 }

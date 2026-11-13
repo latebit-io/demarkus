@@ -15,7 +15,7 @@ import (
 
 // inventory lists the live scope recursively, following every cursor. A
 // truncating bound fails the audit: the checks need every document. Archived
-// ones surface only as link targets; graph data and the drift report never.
+// ones surface only as link targets; graph data and Options.Skip never.
 func (a *audit) inventory(ctx context.Context) error {
 	var dirs []string
 	docsIn := map[string][]string{}
@@ -30,7 +30,7 @@ func (a *audit) inventory(ctx context.Context) error {
 		},
 	}
 	err := walker.Walk(ctx, a.opts.Scope, func(docPath string) error {
-		if docPath == protocol.DriftReportPath {
+		if slices.Contains(a.opts.Skip, docPath) {
 			return nil
 		}
 		if len(a.docs) >= MaxDocuments {
