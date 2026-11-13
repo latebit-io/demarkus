@@ -388,7 +388,8 @@ metadata description inserted as the missing summary. At or over
 verbatim to `<path without .md>/<slug>.md` (its headings kept, so
 anchors survive; it links back to the hub; tags are the parent's name,
 its slug, the parent tags it mentions and every parent `axis:value`
-tag; the parent's fields the effective write policy requires; a
+tag; the parent's fields the effective write policy requires; the
+parent's `rel-based-on` pins, a relative path pin made absolute; a
 description naming the section and the parent, also its summary line),
 the document keeps its path as the hub with its preamble, a `Topics`
 list and its short sections, and its tags lose the non-axis ones only
@@ -445,7 +446,9 @@ draft refuses.
 - `stage` reads the source: status (`staged`, or `promoted` with its
   `promoted-via`, `promoted` and `mode` lines), whether the world's
   layout marks it as shared (`candidate:`), its metadata, the packet,
-  then the body.
+  then the body. Its `rel-based-on:` line holds the URL pins only; a
+  path pin names a document in the source store alone and is counted in
+  a `note:`.
 - `dry_run` checks the distilled draft at `url` against the world: the
   caller's write grant (`status: not-permitted`), the world's
   `/.well-known/demarkus/policy.md` merged over the hub world's floor
@@ -457,6 +460,8 @@ draft refuses.
   target path, a same-title row (both shown with their body, capped at
   4 KB) and a row sharing two subject tags; other rows are `related:`.
   `version:` is the target's current version, 0 when it does not exist.
+  A draft with no `rel-based-on` gets `note: unpinned`, unless the
+  policy requires the key and says so as a finding.
 - `apply` rechecks the draft against the packet and the policy, holds it
   to the style gate as `mark_publish` does, and publishes at that
   version with `on_conflict: fail`, `promoted-from` set to `source`

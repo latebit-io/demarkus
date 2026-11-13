@@ -43,7 +43,11 @@ Stages in order; each is a gate, failing one stops there, **not** published. Eve
 
 3. **Route.** Update: the exact target, no new world or path. New brokered document: the destination's `mark_worlds` table from detection; writable worlds only. Force-fetch each `mark://<world>/.well-known/demarkus/world.md` (at most 10; more: stop with `incomplete-routing`); a clear domain or team match auto-routes, else ask from the write-filtered list (labels; unlabeled worlds by name). Descriptor `not-found`: writable, unlabeled; other descriptor failure: surface, exclude from auto-routing. Path: a sensible one under the world (its `template.md` names the layout).
 
-4. **Tag.** Subject tags drawn from the draft, deliberate `importance` (0-1; 0.8 and up for hubs, architecture, key decisions), `type`. The destination's required axes (`category:` and the like) and fields come back as dry run findings. Re-tag; never copy soul tags across.
+4. **Tag.** Subject tags drawn from the draft, deliberate `importance` (0-1; 0.8 and up for hubs, architecture, key decisions), `type`. The destination's required axes (`category:` and the like) and fields come back as dry run findings. Re-tag; never copy soul tags across. `rel-based-on`: the staged values plus a pin per versioned source the draft is written from (a repo path, a page revision).
+   - Pin: the source's own web permalink to the exact immutable version; never a moving one (branch, tag, latest).
+   - Only a version that holds what the draft describes and that readers can reach: nothing uncommitted or unpublished.
+   - No such permalink, or a check you cannot make: no pin for that source.
+   - Drop any pin carrying userinfo, a credential, a token or PII; staged ones included.
 
 5. **Dry run.** `mark_promote` through the destination's server: `url` the target (`mark://<world>/<path>`; never synthesize a `mark://` authority from an MCP slug), `phase: dry_run`, `body`, `metadata`, `source`. `source` is the origin as a non-sensitive identifier by default; the full path only with explicit approval after checking it for names, emails, project identifiers, secrets, tokens, PII; an external origin canonicalized (no userinfo, query, fragment, secrets); unsanitizable: omit `source`, never pass a raw origin. Outcomes:
    - `status: not-permitted`: surface, stop; never guess another target.
@@ -51,9 +55,10 @@ Stages in order; each is a gate, failing one stops there, **not** published. Eve
    - `findings:`: fix the metadata (missing axes, fields, a tag value outside an axis's allowed list) or the draft (style; each finding opens with its rule id) and rerun. The `policy:` line is the world's `/.well-known/demarkus/policy.md` merged over root's floor, what the server judges by.
    - `candidates:`: judge duplication from the shown bodies. A same-title or same-path document covering the draft's subject is updated, not duplicated: `mark_fetch` it with `force: true`, merge the draft into its complete body (drop nothing unasked; apply publishes the body as sent), rerun the dry run with its path as `url` and the merged body; `version:` reports what the update replaces. A conflict goes to the human, never overwritten.
    - `related:` rows: judge from titles; fetch at most the ones that may overlap. `note: catalog-only`: dedup evidence is partial, said at the gate.
+   - `note: unpinned`: pin per step 4, rerun; nothing to pin: said at the gate.
    - `status: ready` (or `findings` the user accepts as warnings): keep the `packet`.
 
-6. **Human gate.** Effective autonomy = `min(local preference, autonomy_ceiling)`, default human-in-the-loop. Present the draft, the target url, tags, importance, the findings, candidates and dedup notes; explicit approval before publishing. A model refute-check (does the distillation hold against its source?) may stand in only under `verify-then-auto` when local preference allows; `auto` (no gate) only for a low-stakes `scratch` world, never an authoritative one. Declined: stop, report, nothing published.
+6. **Human gate.** Effective autonomy = `min(local preference, autonomy_ceiling)`, default human-in-the-loop. Present the draft, the target url, tags, importance, pins, the findings, candidates and notes; explicit approval before publishing. A model refute-check (does the distillation hold against its source?) may stand in only under `verify-then-auto` when local preference allows; `auto` (no gate) only for a low-stakes `scratch` world, never an authoritative one. Declined: stop, report, nothing published.
 
 7. **Apply.** `mark_promote` with the same `url`, `body`, `metadata`, `source`, `phase: apply` and the `packet`. `does not match` (the draft, metadata or target moved): back to step 5. `apply refused` (policy, style block, conflict): surface, fix through step 5 or stop; never retry blindly. `status: published`: keep its `target`, `version` and `via`. The response echoes the request url; never reconstruct it.
 

@@ -117,3 +117,22 @@ func TestDrift(t *testing.T) {
 		}
 	}
 }
+
+func TestPortableKeepsUrlsOnly(t *testing.T) {
+	value := "/adr/x.md/v1, ../y.md/v2, mark://w/z.md/v3, https://github.com/o/r/tree/abcdef0/src, https://example.com/x, mark://w/a b.md/v1"
+	want := []string{"mark://w/z.md/v3", "https://github.com/o/r/tree/abcdef0/src", "https://example.com/x"}
+	if got, left := Portable(value); !slices.Equal(got, want) || left != 3 {
+		t.Errorf("Portable = %q, %d left; want %q, 3 left", got, left, want)
+	}
+	if got, left := Portable(""); got != nil || left != 0 {
+		t.Errorf("Portable(\"\") = %q, %d", got, left)
+	}
+}
+
+func TestRebasedMakesRelativePathPinsAbsolute(t *testing.T) {
+	value := "x.md/v1, ../adr/y.md/v2#rules, /abs.md/v3, mark://w/z.md/v4, https://github.com/o/r/tree/abcdef0/src, a b.md/v1"
+	want := "/plans/x.md/v1, /adr/y.md/v2#rules, /abs.md/v3, mark://w/z.md/v4, https://github.com/o/r/tree/abcdef0/src, a b.md/v1"
+	if got := Rebased(value, "/plans/big.md"); got != want {
+		t.Errorf("Rebased = %q, want %q", got, want)
+	}
+}

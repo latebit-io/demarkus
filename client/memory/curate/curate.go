@@ -29,6 +29,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/neardup"
+	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
@@ -956,6 +957,11 @@ func topicWrite(in *Input, title string, carried map[string]string, s *section) 
 	// The server types an untyped topic on write; typing it here keeps the
 	// digest equal to what lands, so a resumed split finds it identical.
 	meta = storefmt.ApplyOKFTypeDefault(s.topic, meta)
+	// A topic was written from what its parent was: the pins carry, made
+	// absolute so they resolve from the topic's path.
+	if pins := carried[provenance.Key]; pins != "" {
+		meta[provenance.Key] = provenance.Rebased(pins, parentPath)
+	}
 	if policy != nil {
 		for _, field := range policy.ForCaller().RequiredFields {
 			if _, set := meta[field]; !set && carried[field] != "" {

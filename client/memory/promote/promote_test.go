@@ -2,6 +2,7 @@ package promote_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -72,6 +73,22 @@ func TestStageReportsMarkersAndTheLayoutVerdict(t *testing.T) {
 	}
 	if plain.Packet == s.Packet {
 		t.Error("packets collide")
+	}
+}
+
+// A copy lives in another store: URL pins carry, a path pin does not.
+func TestStageCarriesPortablePins(t *testing.T) {
+	l := layout.Default()
+	const repo = "https://github.com/o/r/tree/abcdef0/src"
+	s := promote.Stage(&promote.Input{Path: "/plans/x.md", Body: plainDoc, Version: 2, Metadata: map[string]string{"rel-based-on": "/adr/a.md/v3, " + repo + ", mark://team/b.md/v4"}}, &l)
+	for _, want := range []string{"rel-based-on: " + repo + ", mark://team/b.md/v4\n", "note: 1 rel-based-on values not carried: only a URL names its source from another store\n"} {
+		if r := s.Report(); !strings.Contains(r, want) {
+			t.Errorf("report missing %q:\n%s", want, r)
+		}
+	}
+	bare := promote.Stage(&promote.Input{Path: "/plans/x.md", Body: plainDoc, Version: 2}, &l)
+	if r := bare.Report(); strings.Contains(r, "rel-based-on") {
+		t.Errorf("unpinned source reports pins:\n%s", r)
 	}
 }
 
@@ -237,6 +254,16 @@ func TestExamineAgainstThePolicy(t *testing.T) {
 	}
 	if clean.Packet == c.Packet {
 		t.Error("packets collide")
+	}
+	// An unpinned draft is noted once: by the policy's finding when it requires the pin.
+	if !strings.Contains(clean.Report(), "note: unpinned: ") {
+		t.Errorf("unpinned draft not noted:\n%s", clean.Report())
+	}
+	pinned := promote.Examine(&promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles.\n", Metadata: map[string]string{"tags": "x", "rel-based-on": "https://github.com/o/r/tree/abcdef0"}}, nil)
+	requires := publishpolicy.Parse("strictness: block\nrequire_fields: rel-based-on\n")
+	required := promote.Examine(&promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles.\n", Metadata: map[string]string{"tags": "x"}}, &requires)
+	if len(pinned.Notes) != 0 || len(required.Notes) != 0 || !slices.Contains(required.Missing, "missing metadata rel-based-on") {
+		t.Errorf("pinned notes = %q, required notes = %q, missing = %q", pinned.Notes, required.Notes, required.Missing)
 	}
 }
 
