@@ -63,7 +63,7 @@ func DepsFor(cfg *core.Config, profile *Profile, shared core.SharedDeps, provisi
 	var federated map[string]bool
 	if cfg.Federation.Hub != "" && !profile.TenantScoped { // a tenant's graph never leaves its own world
 		federated = map[string]bool{}
-		for _, name := range cfg.FederatedWorlds() {
+		for _, name := range cfg.LocalKnowledgeWorlds() {
 			federated[name] = true
 		}
 	}

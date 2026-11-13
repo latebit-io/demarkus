@@ -432,6 +432,20 @@ broker-signed tokens are invalidated. The graph store behind
 `mark_backlinks`, `mark_graph` and friends is process memory and rebuilds
 after a restart.
 
+Drift reports: with `broker.driftReport.enabled`, one replica (Lease
+`broker.driftReport.leaseName`) audits each static knowledge world,
+`broker.driftReport.interval` (24h by default) after the last pass, and
+writes that world's `/reports/drift.md`: the documents whose pinned
+sources moved, by owner, and the share of documents pinned. A world reads
+only its own report. No model is called. A pass reads every document of
+every world at up to 5 reads a second; an unchanged world writes no new
+version, and the report keeps its last 30. The report is an ordinary
+write: a world whose `policy.md` requires tag axes or fields refuses it
+until that policy lists `exempt: /reports/**`, and the broker logs the
+refusal each pass. Archive a world's report to opt that world out.
+The report is a document like any other to `mark_doctor`: link
+`/reports/` from the world's hub, or it lists as an orphan.
+
 Federation: with a hub, `broker.federation.hub` or else the world marked
 `hub: true`, one replica (Lease
 `broker.federation.leaseName`) derives each static knowledge world's graph
@@ -471,7 +485,8 @@ NetworkPolicy. The built-in policy therefore requires explicit
 or CNI FQDN policy.
 
 The broker's Role is scoped to its own state Secrets, the sweeper Lease (and
-the federation Lease when federation has a hub), plus the registry and
+the federation Lease when federation has a hub, the drift report Lease when
+drift reports are on), plus the registry and
 worlds fragment when provisioning is on; `create` is namespace-wide
 because RBAC cannot name a Secret before it exists. Internet-facing OAuth
 and the store share one pod: the mitigation is the hardened HTTP server and

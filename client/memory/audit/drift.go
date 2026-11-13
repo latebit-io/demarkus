@@ -1,18 +1,54 @@
 package audit
 
 import (
+	"context"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/provenance"
 )
+
+// Drift runs the drift check and the freshness baseline alone, on metadata:
+// no body is kept and no other check runs. It counts what Run counts, for a
+// caller that audits whole stores on a schedule.
+func Drift(ctx context.Context, store Store, opts Options) (*Report, error) {
+	a, err := newAudit(store, opts)
+	if err != nil {
+		return nil, err
+	}
+	a.metaOnly = true
+	ctx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
+	defer cancel()
+	a.readPolicy(ctx)
+	if err := a.inventory(ctx); err != nil {
+		return nil, err
+	}
+	if err := a.fetchAll(ctx); err != nil {
+		return nil, err
+	}
+	a.checkDrift()
+	return &Report{Scope: a.opts.Scope, Documents: len(a.order), Freshness: a.fresh, Findings: a.findings, Coverage: a.coverage}, nil
+}
+
+// unjudged reports the status of a read that failed or never ran: the
+// document is unknown, not gone.
+func unjudged(status string) bool {
+	return status != protocol.StatusOK && status != protocol.StatusNotFound && status != protocol.StatusArchived
+}
+
+// unaudited reports a path this audit never inventories: outside the scope,
+// or one the caller skipped. Absence from the inventory says nothing of it.
+func (a *audit) unaudited(docPath string) bool {
+	return !strings.HasPrefix(docPath, a.opts.Scope) || slices.Contains(a.opts.Skip, docPath)
+}
 
 // checkDrift compares each pin on a document in this store with its current
 // version: a source past its pin may leave the pinning document stale. Pins
 // on other stores, repositories or the web need a reader this audit lacks.
 func (a *audit) checkDrift() {
-	outside := 0
+	outside, unread := 0, 0
 	var behind []int
 	for _, p := range a.order {
 		d := a.docs[p]
@@ -20,10 +56,14 @@ func (a *audit) checkDrift() {
 			continue
 		}
 		pins := provenance.Parse(d.meta[provenance.Key])
+		owner := ownerOf(d.meta)
 		if a.pinExpected(p) {
 			a.fresh.Eligible++
 			if slices.ContainsFunc(pins, provenance.Pin.Pinned) {
 				a.fresh.Pinned++
+			}
+			if owner != "" {
+				a.fresh.Owned++
 			}
 		}
 		a.fresh.Pins += len(pins)
@@ -40,8 +80,10 @@ func (a *audit) checkDrift() {
 			}
 			source, inventoried := a.docs[target]
 			switch {
-			case !inventoried && !strings.HasPrefix(target, a.opts.Scope):
+			case !inventoried && a.unaudited(target):
 				outside++
+			case inventoried && unjudged(source.status):
+				unread++
 			case !inventoried || !live(source.status):
 				a.fresh.PinsChecked++
 				a.add(CheckDrift, p, "based on "+target+", which is not a live document here", "pin the document that replaced it, or drop the pin")
@@ -65,6 +107,12 @@ func (a *audit) checkDrift() {
 		}
 		if len(a.findings) > found {
 			a.fresh.DocumentsDrifted++
+			if owner == "" {
+				a.fresh.DocumentsUnowned++
+			}
+		}
+		for i := found; i < len(a.findings); i++ {
+			a.findings[i].Owner = owner
 		}
 	}
 	if n := len(behind); n > 0 {
@@ -72,6 +120,9 @@ func (a *audit) checkDrift() {
 		a.fresh.MedianBehind, a.fresh.MaxBehind = behind[n/2], behind[n-1]
 	}
 	if outside > 0 {
-		a.note("%d %s pins on documents outside the scope not checked for drift", outside, provenance.Key)
+		a.note("%d %s pins on documents outside the scope or skipped not checked for drift", outside, provenance.Key)
+	}
+	if unread > 0 {
+		a.note("%d %s pins on documents that could not be read not checked for drift", unread, provenance.Key)
 	}
 }

@@ -156,7 +156,7 @@ func Open(configPath string, opts *RunOptions, log *slog.Logger) (*Broker, error
 		gateways: gateways,
 		tasks: &backgroundTasks{
 			cfg: cfg, log: log, store: store, k8s: k8s, srv: srv, provisioner: provisioner,
-			local: composite, refuseFederation: refuseFederation,
+			local: composite, floor: dispatch.FloorOf(opts.LocalWorlds), refuseFederation: refuseFederation,
 		},
 		closeBucket: closeBuckets,
 	}
@@ -303,7 +303,7 @@ func checkLocalWorlds(cfg *core.Config, registry *core.WorldRegistry, local Loca
 	if cfg.Federation.Hub == "" {
 		return refuseFederation, nil
 	}
-	for _, world := range cfg.FederatedWorlds() {
+	for _, world := range cfg.LocalKnowledgeWorlds() {
 		if err := refuseFederation(world); err != nil {
 			return nil, err
 		}
@@ -398,6 +398,8 @@ type backgroundTasks struct {
 	provisioner *storage.Provisioner
 	// local dispatches to the worlds served in process; nil when none are.
 	local *dispatch.Composite
+	// floor names the world whose write policy the others merge under; "" is none.
+	floor string
 	// refuseFederation is the deriver's gate check; nil derives every world.
 	refuseFederation func(world string) error
 }
@@ -408,6 +410,7 @@ type backgroundTasks struct {
 func (b *backgroundTasks) start(ctx context.Context, wg *sync.WaitGroup) {
 	b.startSweeper(ctx, wg)
 	b.startFederation(ctx, wg)
+	b.startDriftReports(ctx, wg)
 	if b.provisioner != nil {
 		// Keeps this replica converged with tenants its siblings provisioned.
 		wg.Go(func() {
@@ -437,7 +440,7 @@ func (b *backgroundTasks) startFederation(ctx context.Context, wg *sync.WaitGrou
 	if f.Hub == "" {
 		return
 	}
-	worlds := b.cfg.FederatedWorlds()
+	worlds := b.cfg.LocalKnowledgeWorlds()
 	log := b.log.With("task", "federation")
 	log.Info("broker: starting federation", "hub", f.Hub, "worlds", worlds)
 	b.lead(ctx, wg, leaderTask{name: "federation", lease: f.LeaseName, run: func(ctx context.Context) {

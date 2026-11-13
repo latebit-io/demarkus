@@ -67,6 +67,7 @@ knowledge/internal/broker/dispatch              knowledge  # worlds by name: in 
 knowledge/internal/broker/httpauth              knowledge  # bearer and subject-limit middleware both listeners mount
 knowledge/internal/broker/oauthsrv              knowledge  # identity: grants, refresh, JWKS
 knowledge/internal/broker/storage               knowledge
+knowledge/internal/driftreport                  knowledge
 knowledge/internal/federation                   knowledge
 knowledge/internal/judge                        knowledge  # links the SDK the soul binary must not
 knowledge/internal/leader                       knowledge
