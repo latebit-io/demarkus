@@ -25,13 +25,15 @@ func (t *Tools) driftLine(ctx context.Context, target Target, token string, meta
 		pinned int
 	}
 	var sources []source
+	// A version path (/doc.md/vN) is read too; its pins resolve from the document.
+	doc := provenance.ParsePin(target.Path).Source
 	resolve, seen := links.ResolverFor(target.Host), map[string]bool{}
 	for _, pin := range provenance.Parse(meta[provenance.Key]) {
 		pinned := pin.DocumentVersion()
 		if pinned == 0 {
 			continue
 		}
-		if p := resolve.Path(target.Path, pin.Source); p != "" && p != target.Path && !seen[p] {
+		if p := resolve.Path(doc, pin.Source); p != "" && p != doc && !seen[p] {
 			seen[p] = true
 			sources = append(sources, source{p, pinned})
 		}

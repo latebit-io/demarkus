@@ -81,8 +81,8 @@ func TestFetchDedupsThroughTheSeenStore(t *testing.T) {
 func TestFetchReportsDrift(t *testing.T) {
 	backend := &fetchtest.Client{FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
 		switch r.Path {
-		case "/notes/r.md":
-			return fetchtest.Head("# R\n\nbody\n", 2, map[string]string{"etag": "e2", "rel-based-on": "../adr/a.md/v3, /gone.md/v1, /adr/b.md/v2, mark://host:6309/adr/d.md/v9, /adr/c.md, mark://kb/x.md/v1, https://github.com/o/r/tree/abcdef0"}), nil
+		case "/notes/r.md", "/notes/r.md/v2":
+			return fetchtest.Head("# R\n\nbody\n", 2, map[string]string{"etag": "e2", "rel-based-on": "../adr/a.md/v3, /gone.md/v1, /adr/b.md/v2, mark://host:6309/adr/d.md/v9, /adr/c.md, mark://kb/x.md/v1, r.md/v1, https://github.com/o/r/tree/abcdef0"}), nil
 		case "/adr/a.md":
 			return fetchtest.Head("# A\n", 5, nil), nil
 		case "/adr/b.md":
@@ -117,6 +117,10 @@ func TestFetchReportsDrift(t *testing.T) {
 	}
 	if section := tools.Fetch(t.Context(), fetchArgs("/notes/r.md#r")); !strings.Contains(section.Text, line) {
 		t.Errorf("section fetch lacks the drift line:\n%s", section.Text)
+	}
+	// A version path resolves its relative pins, and skips a pin on itself, from the document.
+	if versioned := tools.Fetch(t.Context(), fetchArgs("/notes/r.md/v2")); !strings.Contains(versioned.Text, line) {
+		t.Errorf("version path fetch lacks the drift line:\n%s", versioned.Text)
 	}
 	if plain := tools.Fetch(t.Context(), fetchArgs("/plain.md")); plain.IsError || strings.Contains(plain.Text, "drift") {
 		t.Errorf("unpinned document: %q", plain.Text)
