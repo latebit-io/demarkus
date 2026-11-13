@@ -664,6 +664,10 @@ func (a *audit) checkPromotion() {
 			a.promoted++
 			continue
 		}
+		// The server stamps modified in UTC, so the strings order.
+		if m := d.meta["modified"]; m != "" && (a.oldestCandidate == "" || m < a.oldestCandidate) {
+			a.oldestCandidate = m
+		}
 		a.fixBy(a.add(CheckPromotion, p, why, ""), FixPromote)
 	}
 }

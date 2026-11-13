@@ -87,9 +87,12 @@ type Report struct {
 	Coverage  []string  `json:"coverage"`
 	Deep      bool      `json:"deep"`
 	// Promoted counts the documents the promotion check excluded as already
-	// promoted; it reads on the summary line only when that check ran.
-	Promotion bool `json:"promotion"`
-	Promoted  int  `json:"promoted,omitempty"`
+	// promoted and OldestCandidate is the earliest modified stamp among the
+	// rest; both read on the summary line only when that check ran.
+	Promotion       bool      `json:"promotion"`
+	Promoted        int       `json:"promoted,omitempty"`
+	OldestCandidate string    `json:"oldest_candidate,omitempty"`
+	Freshness       Freshness `json:"freshness"`
 	// Plan is what apply would write; a surface shows it, never the JSON.
 	Plan *Plan `json:"-"`
 	// Commands is how the showing surface names its commands; zero names none.
@@ -108,16 +111,18 @@ type document struct {
 }
 
 type audit struct {
-	opts     Options
-	store    Store
-	resolve  links.Resolver
-	docs     map[string]*document
-	order    []string
-	dirs     map[string]bool
-	findings []Finding
-	coverage []string
-	promoted int // documents the promotion check excluded as already promoted
-	layout   layout.Layout
+	opts            Options
+	store           Store
+	resolve         links.Resolver
+	docs            map[string]*document
+	order           []string
+	dirs            map[string]bool
+	findings        []Finding
+	coverage        []string
+	promoted        int    // documents the promotion check excluded as already promoted
+	oldestCandidate string // earliest modified stamp of an unpromoted candidate
+	fresh           Freshness
+	layout          layout.Layout
 	// policy is the floor merged under the store's own, for strictness and
 	// allowed lists; own is the store's, which Effective exempts per path.
 	// policyKnown is false when the store's could not be read.
@@ -188,7 +193,7 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 		a.checkPromotion()
 	}
 	plan := a.plan()
-	return &Report{Scope: a.opts.Scope, Documents: len(a.order), Deep: opts.Deep, Promotion: opts.Promotion, Promoted: a.promoted, Findings: a.findings, Coverage: a.coverage, Plan: plan}, nil
+	return &Report{Scope: a.opts.Scope, Documents: len(a.order), Deep: opts.Deep, Promotion: opts.Promotion, Promoted: a.promoted, OldestCandidate: a.oldestCandidate, Freshness: a.fresh, Findings: a.findings, Coverage: a.coverage, Plan: plan}, nil
 }
 
 // newAudit checks the scope and settles the timeout the caller bounds the

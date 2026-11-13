@@ -359,8 +359,8 @@ func TestPromotionCandidates(t *testing.T) {
 		"/adr/0003-c.md":         {Body: stamped, Meta: map[string]string{"tags": "adr", "type": "Decision"}},
 		"/adr/2026/0004-d.md":    {Body: body, Meta: map[string]string{"tags": "adr"}},
 		"/journal/old.md":        {Body: body, Meta: map[string]string{"tags": "j,promoted", "type": "Decision"}},
-		"/architecture.md":       {Body: body, Meta: map[string]string{"tags": "arch", "type": "Architecture"}},
-		"/notes.md":              {Body: body, Meta: map[string]string{"tags": "n", "type": "Note", "importance": "0.9"}},
+		"/architecture.md":       {Body: body, Meta: map[string]string{"tags": "arch", "type": "Architecture", "modified": "2026-06-17T09:00:00Z"}},
+		"/notes.md":              {Body: body, Meta: map[string]string{"tags": "n", "type": "Note", "importance": "0.9", "modified": "2026-03-02T10:00:00Z"}},
 		"/journal/2026-01-01.md": {Body: body, Meta: map[string]string{"tags": "j", "type": "Decision", "importance": "1"}},
 		"/plans/p.md":            {Body: body, Meta: map[string]string{"tags": "p", "type": "Plan", "importance": "0.5"}},
 		"/nan.md":                {Body: body, Meta: map[string]string{"tags": "n", "type": "Note", "importance": "NaN"}}, // not a number is below the floor
@@ -382,8 +382,8 @@ func TestPromotionCandidates(t *testing.T) {
 	if r.Promoted != 2 { // the promoted journal entry was never a candidate
 		t.Errorf("promoted excluded = %d, want 2", r.Promoted)
 	}
-	if md := r.Markdown(); !strings.Contains(md, "### Promotion candidates (4)\n") || !strings.Contains(md, ", 2 already promoted\n") {
-		t.Errorf("markdown lacks the section or the excluded count:\n%s", md)
+	if md := r.Markdown(); !strings.Contains(md, "### Promotion candidates (4)\n") || !strings.Contains(md, ", 2 already promoted, oldest candidate modified 2026-03-02\n") {
+		t.Errorf("markdown lacks the section, the excluded count or the oldest candidate:\n%s", md)
 	}
 
 	off, err := Run(context.Background(), newFake(docs), Options{Scope: "/"})

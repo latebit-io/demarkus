@@ -33,6 +33,14 @@ func TestDriftChecks(t *testing.T) {
 	if len(r.Coverage) != 0 {
 		t.Errorf("coverage = %q, want none: repository and other-world pins are by design", r.Coverage)
 	}
+	// The hub is navigation; the repository and other-world pins are counted, not checked.
+	if want := (Freshness{Eligible: 4, Pinned: 3, Pins: 8, PinsChecked: 6, DocumentsChecked: 3, DocumentsDrifted: 2, MedianBehind: 4, MaxBehind: 4}); r.Freshness != want {
+		t.Errorf("freshness = %+v, want %+v", r.Freshness, want)
+	}
+	section := "\n### Freshness\n- pinned: 3 of 4 documents (75%)\n- pins: 6 of 8 checked; the rest name a source this audit cannot read\n- drifted: 2 of 3 documents checked; median 4 versions behind, most 4\n\n### Coverage\n"
+	if md := r.Markdown(); !strings.Contains(md, section) {
+		t.Errorf("report missing the freshness section:\n%s", md)
+	}
 
 	r, err = Run(context.Background(), f, Options{Scope: "/notes/"})
 	if err != nil {
@@ -43,6 +51,10 @@ func TestDriftChecks(t *testing.T) {
 	}
 	if len(r.Coverage) != 1 || !strings.HasPrefix(r.Coverage[0], "6 rel-based-on pins on documents outside the scope") {
 		t.Errorf("coverage = %q", r.Coverage)
+	}
+	// Nothing in scope is a source, so nothing is checked and no drift line shows.
+	if want := (Freshness{Eligible: 3, Pinned: 3, Pins: 8}); r.Freshness != want || strings.Contains(r.Markdown(), "- drifted:") {
+		t.Errorf("freshness = %+v, want %+v and no drift line", r.Freshness, want)
 	}
 }
 
@@ -69,5 +81,9 @@ func TestPolicyChecksHonourExemptions(t *testing.T) {
 	}
 	if got := findings(r, CheckPolicy); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("policy findings:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// A path both layers exempt and the hub expect no pin; a value naming no version is not one.
+	if want := (Freshness{Eligible: 1, Pins: 1}); r.Freshness != want {
+		t.Errorf("freshness = %+v, want %+v", r.Freshness, want)
 	}
 }
