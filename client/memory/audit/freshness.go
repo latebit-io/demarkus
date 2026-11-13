@@ -42,11 +42,7 @@ func (f *Freshness) markdown() string {
 	}
 	b.WriteByte('\n')
 	if f.Pins > 0 {
-		fmt.Fprintf(&b, "- pins: %d of %d checked", f.PinsChecked, f.Pins)
-		if f.PinsChecked < f.Pins {
-			b.WriteString("; the rest name a source this audit cannot read")
-		}
-		b.WriteByte('\n')
+		fmt.Fprintf(&b, "- pins: %d of %d checked\n", f.PinsChecked, f.Pins)
 	}
 	if f.DocumentsChecked > 0 {
 		fmt.Fprintf(&b, "- drifted: %d of %d documents checked", f.DocumentsDrifted, f.DocumentsChecked)

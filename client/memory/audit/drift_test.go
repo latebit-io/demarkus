@@ -37,7 +37,7 @@ func TestDriftChecks(t *testing.T) {
 	if want := (Freshness{Eligible: 4, Pinned: 3, Pins: 8, PinsChecked: 6, DocumentsChecked: 3, DocumentsDrifted: 2, MedianBehind: 4, MaxBehind: 4}); r.Freshness != want {
 		t.Errorf("freshness = %+v, want %+v", r.Freshness, want)
 	}
-	section := "\n### Freshness\n- pinned: 3 of 4 documents (75%)\n- pins: 6 of 8 checked; the rest name a source this audit cannot read\n- drifted: 2 of 3 documents checked; median 4 versions behind, most 4\n\n### Coverage\n"
+	section := "\n### Freshness\n- pinned: 3 of 4 documents (75%)\n- pins: 6 of 8 checked\n- drifted: 2 of 3 documents checked; median 4 versions behind, most 4\n\n### Coverage\n"
 	if md := r.Markdown(); !strings.Contains(md, section) {
 		t.Errorf("report missing the freshness section:\n%s", md)
 	}
