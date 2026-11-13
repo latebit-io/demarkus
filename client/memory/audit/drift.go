@@ -38,6 +38,12 @@ func unjudged(status string) bool {
 	return status != protocol.StatusOK && status != protocol.StatusNotFound && status != protocol.StatusArchived
 }
 
+// unaudited reports a path this audit never inventories: outside the scope,
+// or one the caller skipped. Absence from the inventory says nothing of it.
+func (a *audit) unaudited(docPath string) bool {
+	return !strings.HasPrefix(docPath, a.opts.Scope) || slices.Contains(a.opts.Skip, docPath)
+}
+
 // checkDrift compares each pin on a document in this store with its current
 // version: a source past its pin may leave the pinning document stale. Pins
 // on other stores, repositories or the web need a reader this audit lacks.
@@ -74,7 +80,7 @@ func (a *audit) checkDrift() {
 			}
 			source, inventoried := a.docs[target]
 			switch {
-			case !inventoried && !strings.HasPrefix(target, a.opts.Scope):
+			case !inventoried && a.unaudited(target):
 				outside++
 			case inventoried && unjudged(source.status):
 				unread++
@@ -114,7 +120,7 @@ func (a *audit) checkDrift() {
 		a.fresh.MedianBehind, a.fresh.MaxBehind = behind[n/2], behind[n-1]
 	}
 	if outside > 0 {
-		a.note("%d %s pins on documents outside the scope not checked for drift", outside, provenance.Key)
+		a.note("%d %s pins on documents outside the scope or skipped not checked for drift", outside, provenance.Key)
 	}
 	if unread > 0 {
 		a.note("%d %s pins on documents that could not be read not checked for drift", unread, provenance.Key)

@@ -16,7 +16,7 @@ func TestDriftChecks(t *testing.T) {
 		"/adr/a.md":       {Body: "# A\n\nSummary of A.\n", Meta: map[string]string{"tags": "adr", "version": "5"}},
 		"/notes/r.md":     {Body: "# R\n\nSummary of R.\n", Meta: map[string]string{"tags": "notes", "user": "alice", "rel-based-on": "../adr/a.md/v3, mark://kb/adr/a.md/v5, /adr/a.md/v9, /gone.md/v1"}},
 		"/notes/old.md":   {Body: "# Old\n\nSummary of Old.\n", Meta: map[string]string{"tags": "notes", "user": "bob", "owner": "team-docs", "rel-based-on": "/adr/a.md/v5, https://github.com/o/r/commit/abcdef0, mark://elsewhere/x.md/v1"}},
-		"/notes/scope.md": {Body: "# S\n\nSummary of S.\n", Meta: map[string]string{"tags": "notes", "rel-based-on": "/adr/a.md/v1"}},
+		"/notes/scope.md": {Body: "# S\n\nSummary of S.\n", Meta: map[string]string{"tags": "notes", "rel-based-on": "/adr/a.md/v1, /reports/out.md/v1"}},
 		// A caller's own output, skipped: no document, no finding, no count.
 		"/reports/out.md": {Body: "no heading — nobody links here\n", Meta: map[string]string{"rel-based-on": "/adr/a.md/v1"}},
 	})
@@ -35,8 +35,9 @@ func TestDriftChecks(t *testing.T) {
 	if got := findings(r, CheckDrift); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("drift findings:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if len(r.Coverage) != 0 {
-		t.Errorf("coverage = %q, want none: repository and other-world pins are by design", r.Coverage)
+	// A pin on the skipped document is unchecked, never a missing source.
+	if len(r.Coverage) != 1 || !strings.HasPrefix(r.Coverage[0], "1 rel-based-on pins on documents outside the scope or skipped") {
+		t.Errorf("coverage = %q, want only the pin on the skipped document: repository and other-world pins are by design", r.Coverage)
 	}
 	// The drift-only audit counts and finds what the full one does.
 	only, err := Drift(context.Background(), f, Options{Scope: "/", Skip: skip})
@@ -47,10 +48,10 @@ func TestDriftChecks(t *testing.T) {
 		t.Errorf("drift-only audit = %+v, %d documents, %q; want the full audit's", only.Freshness, only.Documents, findings(only, CheckDrift))
 	}
 	// The hub is navigation; the repository and other-world pins are counted, not checked.
-	if want := (Freshness{Eligible: 4, Pinned: 3, Owned: 2, Pins: 8, PinsChecked: 6, DocumentsChecked: 3, DocumentsDrifted: 2, DocumentsUnowned: 1, MedianBehind: 4, MaxBehind: 4}); r.Freshness != want {
+	if want := (Freshness{Eligible: 4, Pinned: 3, Owned: 2, Pins: 9, PinsChecked: 6, DocumentsChecked: 3, DocumentsDrifted: 2, DocumentsUnowned: 1, MedianBehind: 4, MaxBehind: 4}); r.Freshness != want {
 		t.Errorf("freshness = %+v, want %+v", r.Freshness, want)
 	}
-	section := "\n### Freshness\n- pinned: 3 of 4 documents (75%)\n- owned: 2 of 4 documents (50%)\n- pins: 6 of 8 checked\n- drifted: 2 of 3 documents checked; median 4 versions behind, most 4; 1 with no owner\n\n### Coverage\n"
+	section := "\n### Freshness\n- pinned: 3 of 4 documents (75%)\n- owned: 2 of 4 documents (50%)\n- pins: 6 of 9 checked\n- drifted: 2 of 3 documents checked; median 4 versions behind, most 4; 1 with no owner\n\n### Coverage\n"
 	md := r.Markdown()
 	if !strings.Contains(md, section) {
 		t.Errorf("report missing the freshness section:\n%s", md)
@@ -67,11 +68,11 @@ func TestDriftChecks(t *testing.T) {
 	if got := findings(r, CheckDrift); len(got) != 0 {
 		t.Errorf("drift findings outside the source's scope: %q", got)
 	}
-	if len(r.Coverage) != 1 || !strings.HasPrefix(r.Coverage[0], "6 rel-based-on pins on documents outside the scope") {
+	if len(r.Coverage) != 1 || !strings.HasPrefix(r.Coverage[0], "7 rel-based-on pins on documents outside the scope or skipped") {
 		t.Errorf("coverage = %q", r.Coverage)
 	}
 	// Nothing in scope is a source, so nothing is checked and no drift line shows.
-	if want := (Freshness{Eligible: 3, Pinned: 3, Owned: 2, Pins: 8}); r.Freshness != want || strings.Contains(r.Markdown(), "- drifted:") {
+	if want := (Freshness{Eligible: 3, Pinned: 3, Owned: 2, Pins: 9}); r.Freshness != want || strings.Contains(r.Markdown(), "- drifted:") {
 		t.Errorf("freshness = %+v, want %+v and no drift line", r.Freshness, want)
 	}
 }
