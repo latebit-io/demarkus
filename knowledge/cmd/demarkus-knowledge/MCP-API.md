@@ -176,6 +176,13 @@ Fetch a document. Returns `status` (`ok` | `not-found` | `archived` |
 `unauthorized`), `version`, `modified`, `etag`, `content-hash`, and
 the markdown `body`. Identical wire shape to direct-QUIC `FETCH`.
 
+A document whose `rel-based-on` pins a same-world document at a version
+gets a `drift:` line, the unchanged notice included: each source past
+its pin (`/adr/a.md is at v5, past the pinned v3`) or no longer live,
+then `may be stale`; sources it could not read and sources past the
+five-read limit are counted. Nothing is stored; pins on other worlds,
+repositories and the web are not read.
+
 | Param | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `url` | string | yes | `mark://{worldName}/{path}`; `mark://{worldName}/<dir>/.context` reads a session primer instead: the directory's `index.md`, its three newest journal entries, the roadmap when present and the plans listing (names from the world's template layout), each body capped, with a Coverage section for what could not be read; a directory whose `index.md` is absent or archived answers one `status: new` or `status: archived` line instead. The same path works as an MCP resource. |

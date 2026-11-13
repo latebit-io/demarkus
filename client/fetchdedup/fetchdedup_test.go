@@ -86,3 +86,10 @@ func TestChangedNote(t *testing.T) {
 		})
 	}
 }
+
+func TestUnchangedNoticeCarriesHeaderLines(t *testing.T) {
+	got := UnchangedNotice(Doc{Version: "4", Etag: "e4"}, "drift: /a.md is at v5, past the pinned v3; may be stale")
+	if want := "status: unchanged\nversion: 4\netag: e4\ndrift: /a.md is at v5, past the pinned v3; may be stale\n\nunchanged since v4"; !strings.HasPrefix(got, want) {
+		t.Errorf("notice = %q, want the header line before the blank line", got)
+	}
+}
