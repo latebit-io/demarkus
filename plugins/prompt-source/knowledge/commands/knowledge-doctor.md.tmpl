@@ -51,7 +51,7 @@ Deadline: five minutes from the first broker call, checked before every MCP call
 
 ## Report
 
-Plain, one line per system first (`<system>: <W> worlds, <N> docs, <X> findings`), then per world a `###` header with document count, `writable: yes/no` and `[coverage: your read scope]`, then one `####` section per check, most actionable first, `(<n>)` count, and `[deep check, scanned <k>/<N> docs]` on every deep-check section; one bullet per finding: URL, evidence, one-line fix. Examples:
+Plain, one line per system first (`<system>: <W> worlds, <N> docs, <X> findings`), then per world a `###` header with document count, `writable: yes/no` and `[coverage: your read scope]`, then one `####` section per check, most actionable first, `(<n>)` count, and `[deep check, scanned <k>/<N> docs]` on every deep-check section; one bullet per finding: URL, evidence, one-line fix. Last per world, when the audit ran: `#### Freshness` with the audit's Freshness lines verbatim. Examples:
 
 ```text
 ## <system> hygiene report
@@ -77,6 +77,9 @@ Plain, one line per system first (`<system>: <W> worlds, <N> docs, <X> findings`
 
 #### Metadata lost across versions (<n>)        [deep check, scanned <k>/<N> docs]
 - mark://<world>/<doc>.md: candidate: tagged at v3 (category:ops + 6 tags, importance 0.7), none at v7; repair = force-fetch v7, publish that body with v7's metadata map plus the v3 fields (policy axes and require_fields re-checked), `expected_version: 7`, `on_conflict: "fail"`
+
+#### Freshness        [deep check, mark_doctor]
+- pinned: <p> of <e> documents (<x>%)
 ```
 
 Every other check follows the same bullet shape with its fix; a fix that writes is a gated update on a writable world. End with a short prioritized "what I'd fix first". "All clean" only when every check ran to complete coverage and found nothing; incomplete coverage (deadline, crawl failure, inventory bound, deep-check cap) lists confirmed findings, then the gaps; "no findings in the covered scope" only at zero findings.

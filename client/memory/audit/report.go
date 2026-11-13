@@ -51,12 +51,15 @@ func (c *Commands) FixText(f *Finding) string {
 
 // Markdown renders the hygiene report: heading with the count,
 // a summary line, one section per check with its count and the count apply
-// fixes, one bullet per finding, then Coverage.
+// fixes, one bullet per finding, then Freshness and Coverage.
 func (r *Report) Markdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## %s hygiene report  (%d docs)\n\n%d docs, %d findings", r.Scope, r.Documents, r.Documents, len(r.Findings))
 	if r.Promotion {
 		fmt.Fprintf(&b, ", %d already promoted", r.Promoted)
+		if day, _, ok := strings.Cut(r.OldestCandidate, "T"); ok {
+			b.WriteString(", oldest candidate modified " + day)
+		}
 	}
 	b.WriteByte('\n')
 	hidden, total, fixable := 0, 0, map[string]int{}
@@ -93,6 +96,7 @@ func (r *Report) Markdown() string {
 			hidden += len(fs) - MaxShownPerCheck
 		}
 	}
+	b.WriteString(r.Freshness.markdown())
 	b.WriteString("\n### Coverage\n")
 	if hidden > 0 {
 		fmt.Fprintf(&b, "- %d findings not shown (%d per check); run on a subdirectory for the rest\n", hidden, MaxShownPerCheck)

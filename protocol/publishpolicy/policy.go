@@ -191,10 +191,20 @@ func validateExempt(patterns []string) error {
 // at is the policy as it applies at documentPath: an exempt path keeps
 // only the strictness, so the baseline checks still decide its fate.
 func (p Policy) at(documentPath string) Policy {
-	if protocol.MatchesAnyPath(p.Exempt, documentPath) {
+	if p.exempts(documentPath) {
 		return Policy{Strictness: p.Strictness}
 	}
 	return p
+}
+
+func (p Policy) exempts(documentPath string) bool {
+	return protocol.MatchesAnyPath(p.Exempt, documentPath)
+}
+
+// Exempt reports a path no layer's directives reach: exempt in the world
+// and in the floor, when there is one. Effective holds it to no rule.
+func Exempt(floor *Policy, world Policy, documentPath string) bool {
+	return world.exempts(documentPath) && (floor == nil || floor.exempts(documentPath))
 }
 
 // Effective is the policy a write at documentPath is held to: each layer's
