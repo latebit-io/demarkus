@@ -29,6 +29,7 @@ type Config struct {
 	WorldDialer  WorldDialerConfig  `yaml:"worldDialer"`
 	Provisioning ProvisioningConfig `yaml:"provisioning"`
 	Federation   FederationConfig   `yaml:"federation"`
+	DriftReport  DriftReportConfig  `yaml:"driftReport"`
 }
 
 // Gateway profiles: the knowledge surface (org open reads, per world Allow
@@ -339,9 +340,20 @@ type FederationConfig struct {
 	Interval time.Duration `yaml:"interval"`
 }
 
-// FederatedWorlds names the static knowledge worlds served in process: the
-// worlds the federation graph is derived from, one of them its hub.
-func (c *Config) FederatedWorlds() []string {
+// DriftReportConfig has one replica audit each knowledge world served in
+// process and write its drift report (protocol.DriftReportPath). Off by
+// default: a pass reads every document of every world.
+type DriftReportConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Interval is the time between passes. Default 24h.
+	Interval time.Duration `yaml:"interval"`
+	// LeaseName is the Lease replicas race for. Default demarkus-drift-report.
+	LeaseName string `yaml:"leaseName"`
+}
+
+// LocalKnowledgeWorlds names the static knowledge worlds served in process:
+// the worlds a background task can read and write under its own grant.
+func (c *Config) LocalKnowledgeWorlds() []string {
 	var names []string
 	for i := range c.Worlds {
 		if w := &c.Worlds[i]; w.Local && w.Profile == ProfileKnowledge {

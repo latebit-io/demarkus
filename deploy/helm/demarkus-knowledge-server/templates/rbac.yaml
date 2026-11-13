@@ -18,6 +18,9 @@ rules:
       {{- if include "demarkus-knowledge-server.federationHub" . }}
       - {{ .Values.broker.federation.leaseName | quote }}
       {{- end }}
+      {{- if .Values.broker.driftReport.enabled }}
+      - {{ .Values.broker.driftReport.leaseName | quote }}
+      {{- end }}
     verbs: ["get", "update"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]

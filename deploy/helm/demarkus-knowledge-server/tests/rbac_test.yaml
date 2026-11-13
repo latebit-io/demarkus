@@ -66,6 +66,15 @@ tests:
           path: rules
           count: 4
 
+  - it: adds the drift Lease to the Lease rule when drift reports are on
+    documentIndex: 0
+    set:
+      broker.driftReport.enabled: true
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value: ["demarkus-broker-sweeper", "demarkus-drift-report"]
+
   - it: names the federation Lease for the world marked hub
     documentIndex: 0
     set:

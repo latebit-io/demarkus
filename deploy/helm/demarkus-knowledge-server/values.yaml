@@ -345,6 +345,17 @@ broker:
     quietPeriod: ""
     interval: ""
 
+  # Drift reports: one replica under the Lease audits each static knowledge
+  # world and writes what drifted there, by owner, to that world's
+  # /reports/drift.md. Off by default: a pass reads every document of every
+  # world. Blank interval takes 24h; the least is 10m. A world whose
+  # policy.md requires tag axes or fields must list `exempt: /reports/**`,
+  # or it refuses its report.
+  driftReport:
+    enabled: false
+    leaseName: demarkus-drift-report
+    interval: ""
+
   # Per-subject (/me/install) and per-IP (/auth/login) token buckets.
   # trustForwardedFor is only safe behind an Ingress that strips spoofed
   # X-Forwarded-For; flip it off without one (dev, port-forward).

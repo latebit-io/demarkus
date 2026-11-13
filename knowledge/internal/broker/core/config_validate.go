@@ -64,6 +64,9 @@ func (c *Config) validate() error {
 	if err := c.validateFederation(); err != nil {
 		return err
 	}
+	if err := c.DriftReport.applyDefaultsAndValidate(); err != nil {
+		return err
+	}
 	if err := validateWebClients(c.WebClients); err != nil {
 		return err
 	}
@@ -115,6 +118,20 @@ func (s *SweeperConfig) applyDefaultsAndValidate() error {
 	return nil
 }
 
+// minDriftReportInterval keeps a mistyped interval from auditing every world in a
+// loop: a pass costs one read per document.
+const minDriftReportInterval = 10 * time.Minute
+
+// applyDefaultsAndValidate fills the drift report knobs and bounds the interval.
+func (d *DriftReportConfig) applyDefaultsAndValidate() error {
+	d.LeaseName = cmp.Or(d.LeaseName, "demarkus-drift-report")
+	d.Interval = cmp.Or(d.Interval, 24*time.Hour)
+	if d.Interval < minDriftReportInterval {
+		return fmt.Errorf("driftReport.interval must be at least %s (got %s); zero takes the default", minDriftReportInterval, d.Interval)
+	}
+	return nil
+}
+
 // validateFederation fills the federation knobs; the hub must be a static
 // knowledge world served in process, the only place its grant can work.
 func (c *Config) validateFederation() error {
@@ -122,7 +139,7 @@ func (c *Config) validateFederation() error {
 	if f.Hub == "" {
 		return nil
 	}
-	if !slices.Contains(c.FederatedWorlds(), f.Hub) {
+	if !slices.Contains(c.LocalKnowledgeWorlds(), f.Hub) {
 		return fmt.Errorf("federation.hub %q must name a local knowledge world", f.Hub)
 	}
 	f.LeaseName = cmp.Or(f.LeaseName, "demarkus-federation")

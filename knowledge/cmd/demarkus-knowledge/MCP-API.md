@@ -290,7 +290,12 @@ A Freshness section precedes it: documents with a versioned
 files or paths every policy layer exempts), pins checked out of all
 (only sources in scope are read), and documents drifted with the median
 and most versions behind. With `promotion: true` the summary line names
-the oldest `modified` among the unpromoted candidates.
+the oldest `modified` among the unpromoted candidates. A Source drift
+finding names its owner: the document's `owner` metadata, else the
+verified `user` behind its last write. A world that records owners also
+gets the owned share of documents and the drifted ones with no owner.
+The audit skips `/reports/drift.md`, the report the broker writes on a
+schedule (`driftReport.enabled`).
 An audit that cannot be trusted (scope not found, unauthorized,
 inventory bound) is a tool error. The memory broker scopes it to the
 caller's world.

@@ -69,9 +69,11 @@ type Options struct {
 // FixKind marks a fix one of the surface's commands settles for Path; Fix is
 // then what to add to it, never a command. Fixable: the report's Plan settles it.
 type Finding struct {
-	Check   string `json:"check"`
-	Path    string `json:"path"`
-	Detail  string `json:"detail"`
+	Check  string `json:"check"`
+	Path   string `json:"path"`
+	Detail string `json:"detail"`
+	// Owner is who a drift finding goes to; "" for every other check.
+	Owner   string `json:"owner,omitempty"`
 	Fix     string `json:"fix,omitempty"`
 	FixKind string `json:"fix_kind,omitempty"`
 	Fixable bool   `json:"fixable,omitempty"`
@@ -130,6 +132,8 @@ type audit struct {
 	own         publishpolicy.Policy
 	policyKnown bool
 	leads       leads // findings a fix may settle, for the plan
+	// metaOnly keeps each document's status and metadata and drops its body.
+	metaOnly bool
 }
 
 // IsSlug reports whether s can be a store path segment; the layout owns the rule.
@@ -253,8 +257,11 @@ func (a *audit) fetchAll(ctx context.Context) error {
 			a.note("fetch %s returned %s", p, resp.Status)
 			continue
 		}
-		d.body = resp.Body
 		bytes += int64(len(resp.Body))
+		if a.metaOnly {
+			continue
+		}
+		d.body = resp.Body
 		d.headings = mdoutline.Headings(resp.Body)
 		a.classifyLinks(d)
 	}

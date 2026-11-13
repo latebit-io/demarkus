@@ -86,6 +86,9 @@ func (r *Report) Markdown() string {
 		b.WriteString(")\n")
 		for _, f := range fs[:min(len(fs), MaxShownPerCheck)] {
 			fmt.Fprintf(&b, "- %s: %s", f.Path, f.Detail)
+			if f.Owner != "" {
+				b.WriteString(" (owner " + f.Owner + ")")
+			}
 			if fix := r.Commands.FixText(&f); fix != "" {
 				b.WriteString("; fix: " + fix)
 			}
@@ -96,7 +99,10 @@ func (r *Report) Markdown() string {
 			hidden += len(fs) - MaxShownPerCheck
 		}
 	}
-	b.WriteString(r.Freshness.markdown())
+	b.WriteString("\n### Freshness\n")
+	for _, line := range r.Freshness.Lines() {
+		b.WriteString("- " + line + "\n")
+	}
 	b.WriteString("\n### Coverage\n")
 	if hidden > 0 {
 		fmt.Fprintf(&b, "- %d findings not shown (%d per check); run on a subdirectory for the rest\n", hidden, MaxShownPerCheck)

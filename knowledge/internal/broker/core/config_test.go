@@ -312,6 +312,20 @@ func TestLoadConfig(t *testing.T) {
 			},
 		},
 		{
+			name:    "driftReport.interval under ten minutes rejected",
+			body:    validConfig + "driftReport:\n  enabled: true\n  interval: 30s\n",
+			wantErr: "driftReport.interval must be at least 10m0s",
+		},
+		{
+			name: "drift reports are off by default, daily when on",
+			body: validConfig,
+			validate: func(t *testing.T, c *Config) {
+				if d := c.DriftReport; d.Enabled || d.Interval != 24*time.Hour || d.LeaseName != "demarkus-drift-report" {
+					t.Errorf("driftReport defaults = %+v, want off, 24h, demarkus-drift-report", d)
+				}
+			},
+		},
+		{
 			name:    "unknown field caught",
 			body:    validConfig + "extraField: oops\n",
 			wantErr: "field extraField not found",

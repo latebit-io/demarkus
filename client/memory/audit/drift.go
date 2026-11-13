@@ -1,12 +1,35 @@
 package audit
 
 import (
+	"context"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/latebit-io/demarkus/protocol/provenance"
 )
+
+// Drift runs the drift check and the freshness baseline alone, on metadata:
+// no body is kept and no other check runs. It counts what Run counts, for a
+// caller that audits whole stores on a schedule.
+func Drift(ctx context.Context, store Store, opts Options) (*Report, error) {
+	a, err := newAudit(store, opts)
+	if err != nil {
+		return nil, err
+	}
+	a.metaOnly = true
+	ctx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
+	defer cancel()
+	a.readPolicy(ctx)
+	if err := a.inventory(ctx); err != nil {
+		return nil, err
+	}
+	if err := a.fetchAll(ctx); err != nil {
+		return nil, err
+	}
+	a.checkDrift()
+	return &Report{Scope: a.opts.Scope, Documents: len(a.order), Freshness: a.fresh, Findings: a.findings, Coverage: a.coverage}, nil
+}
 
 // checkDrift compares each pin on a document in this store with its current
 // version: a source past its pin may leave the pinning document stale. Pins
@@ -20,10 +43,14 @@ func (a *audit) checkDrift() {
 			continue
 		}
 		pins := provenance.Parse(d.meta[provenance.Key])
+		owner := ownerOf(d.meta)
 		if a.pinExpected(p) {
 			a.fresh.Eligible++
 			if slices.ContainsFunc(pins, provenance.Pin.Pinned) {
 				a.fresh.Pinned++
+			}
+			if owner != "" {
+				a.fresh.Owned++
 			}
 		}
 		a.fresh.Pins += len(pins)
@@ -65,6 +92,12 @@ func (a *audit) checkDrift() {
 		}
 		if len(a.findings) > found {
 			a.fresh.DocumentsDrifted++
+			if owner == "" {
+				a.fresh.DocumentsUnowned++
+			}
+		}
+		for i := found; i < len(a.findings); i++ {
+			a.findings[i].Owner = owner
 		}
 	}
 	if n := len(behind); n > 0 {
