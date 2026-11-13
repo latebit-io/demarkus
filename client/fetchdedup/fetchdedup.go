@@ -27,9 +27,9 @@ func (d Doc) Identified() bool {
 }
 
 // UnchangedNotice renders the dedup short-circuit response: the document
-// identity, both fields when present, plus a pointer at force=true. Only
-// call it for an Identified Doc.
-func UnchangedNotice(d Doc) string {
+// identity, both fields when present, the caller's header lines, plus a
+// pointer at force=true. Only call it for an Identified Doc.
+func UnchangedNotice(d Doc, header ...string) string {
 	var b strings.Builder
 	b.WriteString("status: unchanged\n")
 	if d.Version != "" {
@@ -37,6 +37,9 @@ func UnchangedNotice(d Doc) string {
 	}
 	if d.Etag != "" {
 		fmt.Fprintf(&b, "etag: %s\n", d.Etag)
+	}
+	for _, line := range header {
+		b.WriteString(line + "\n")
 	}
 	since := "since this session's earlier fetch (etag match)"
 	if d.Version != "" {

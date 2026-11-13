@@ -2,6 +2,7 @@ package marktools_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -72,6 +73,71 @@ func TestFetchDedupsThroughTheSeenStore(t *testing.T) {
 	section := tools.Fetch(t.Context(), fetchArgs("/doc.md#doc"))
 	if section.IsError || !strings.Contains(section.Text, "section: #doc") {
 		t.Errorf("section fetch = %+v, want the slice whatever was seen", section)
+	}
+}
+
+// A fetch reads the sources its document pins on this store and says which
+// moved; the unchanged notice carries the line too, since only a source moved.
+func TestFetchReportsDrift(t *testing.T) {
+	backend := &fetchtest.Client{FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		switch r.Path {
+		case "/notes/r.md":
+			return fetchtest.Head("# R\n\nbody\n", 2, map[string]string{"etag": "e2", "rel-based-on": "../adr/a.md/v3, /gone.md/v1, /adr/b.md/v2, mark://host:6309/adr/d.md/v9, /adr/c.md, mark://kb/x.md/v1, https://github.com/o/r/tree/abcdef0"}), nil
+		case "/adr/a.md":
+			return fetchtest.Head("# A\n", 5, nil), nil
+		case "/adr/b.md":
+			return fetchtest.Head("# B\n", 2, nil), nil
+		case "/adr/d.md":
+			return fetchtest.Head("# D\n", 4, nil), nil
+		case "/plain.md":
+			return fetchtest.Head("# P\n\nbody\n", 1, nil), nil
+		}
+		return fetch.Result{Response: protocol.Response{Status: protocol.StatusNotFound}}, nil
+	}}
+	hooks := directHooks()
+	hooks.Seen = &mapSeen{}
+	tools := newTools(t, backend, hooks)
+	const line = "drift: /adr/a.md is at v5, past the pinned v3; /gone.md is not a live document here; /adr/d.md has no v9; it is at v4; may be stale\n"
+
+	first := tools.Fetch(t.Context(), fetchArgs("/notes/r.md"))
+	if first.IsError || !strings.Contains(first.Text, line) {
+		t.Fatalf("first fetch lacks the drift line:\n%s", first.Text)
+	}
+	// Only versioned pins on this store are read: no unversioned, other-store or repository source.
+	read := make([]string, 0, len(backend.FetchCalls))
+	for _, r := range backend.FetchCalls {
+		read = append(read, r.Path)
+	}
+	slices.Sort(read)
+	if want := []string{"/adr/a.md", "/adr/b.md", "/adr/d.md", "/gone.md", "/notes/r.md"}; !slices.Equal(read, want) {
+		t.Errorf("read %q, want %q", read, want)
+	}
+	if second := tools.Fetch(t.Context(), fetchArgs("/notes/r.md")); !strings.Contains(second.Text, "status: unchanged\nversion: 2\netag: e2\n"+line+"\nunchanged since v2") {
+		t.Errorf("unchanged notice lacks the drift line in its header:\n%s", second.Text)
+	}
+	if section := tools.Fetch(t.Context(), fetchArgs("/notes/r.md#r")); !strings.Contains(section.Text, line) {
+		t.Errorf("section fetch lacks the drift line:\n%s", section.Text)
+	}
+	if plain := tools.Fetch(t.Context(), fetchArgs("/plain.md")); plain.IsError || strings.Contains(plain.Text, "drift") {
+		t.Errorf("unpinned document: %q", plain.Text)
+	}
+}
+
+// A source that cannot be read is counted, never taken as current.
+func TestFetchCountsUnjudgedSources(t *testing.T) {
+	backend := &fetchtest.Client{FetchFn: func(_ context.Context, r fetch.FetchRequest) (fetch.Result, error) {
+		switch r.Path {
+		case "/doc.md":
+			return fetchtest.Head("# D\n\nbody\n", 1, map[string]string{"rel-based-on": "/s1.md/v1, /s2.md/v1, /s3.md/v1, /s4.md/v1, /s5.md/v1, /s6.md/v1, /s7.md/v1"}), nil
+		case "/s1.md":
+			return fetch.Result{Response: protocol.Response{Status: protocol.StatusUnauthorized}}, nil
+		}
+		return fetchtest.Head("# S\n", 1, nil), nil
+	}}
+	got := newTools(t, backend, directHooks()).Fetch(t.Context(), fetchArgs("/doc.md"))
+	// Nothing moved, so no stale claim.
+	if got.IsError || !strings.Contains(got.Text, "drift: 1 unreadable; 2 past the limit of 5\n") {
+		t.Errorf("fetch = %q, want one refused source and two past the bound", got.Text)
 	}
 }
 

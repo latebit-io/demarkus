@@ -41,9 +41,8 @@ func (t *Tools) Fetch(ctx context.Context, args FetchArgs) Result {
 	if isContextPath(target.Path) {
 		return t.Context(ctx, docURL)
 	}
-	result, err := t.backend.Fetch(ctx, fetch.FetchRequest{
-		Host: target.Host, Path: target.Path, Token: t.readToken(ctx, target.Host),
-	})
+	token := t.readToken(ctx, target.Host)
+	result, err := t.backend.Fetch(ctx, fetch.FetchRequest{Host: target.Host, Path: target.Path, Token: token})
 	if err != nil {
 		return t.failed(SiteFetch, target.Host, err)
 	}
@@ -64,10 +63,18 @@ func (t *Tools) Fetch(ctx context.Context, args FetchArgs) Result {
 			return failure("%v", err)
 		}
 		extra := map[string]string{"section": "#" + anchor}
+		addDrift(extra, t.driftLine(ctx, target, token, result.Response.Metadata))
 		addReadWarning(extra, section, result.Response.Metadata)
 		return text(mcpfmt.FullWith(result, docframe.Frame(section), extra, mcpfmt.FetchKeys...))
 	}
-	return t.fullOrOutline(ctx, &fetched{target: target, docURL: docURL, result: result}, args)
+	return t.fullOrOutline(ctx, &fetched{target: target, docURL: docURL, result: result, token: token}, args)
+}
+
+// addDrift adds the drift line to extra, if any.
+func addDrift(extra map[string]string, drift string) {
+	if drift != "" {
+		extra["drift"] = drift
+	}
 }
 
 // addReadWarning adds the steering findings in text to extra, if any: rules
@@ -83,6 +90,7 @@ type fetched struct {
 	target Target
 	docURL string
 	result fetch.Result
+	token  string
 }
 
 func (t *Tools) fullOrOutline(ctx context.Context, f *fetched, args FetchArgs) Result {
@@ -90,12 +98,18 @@ func (t *Tools) fullOrOutline(ctx context.Context, f *fetched, args FetchArgs) R
 	// Dedup needs an identity: with version and etag both absent, a changed
 	// document would compare equal and be reported as unchanged.
 	cur := fetchdedup.Doc{Version: meta["version"], Etag: meta["etag"]}
+	drift := t.driftLine(ctx, f.target, f.token, meta)
 	key := f.target.Host + f.target.Path
 	prev, seenBefore := t.seenLookup(ctx, key)
 	if seenBefore && !args.Force && cur.Identified() && prev == cur {
+		// The body is unchanged; its sources may still have moved.
+		if drift != "" {
+			return text(fetchdedup.UnchangedNotice(cur, "drift: "+drift))
+		}
 		return text(fetchdedup.UnchangedNotice(cur))
 	}
 	extra := map[string]string{}
+	addDrift(extra, drift)
 	if seenBefore && cur.Identified() && prev != cur {
 		extra["note"] = fetchdedup.ChangedNote(prev, cur)
 	}
