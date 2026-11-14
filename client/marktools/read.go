@@ -114,6 +114,9 @@ func (t *Tools) Lookup(ctx context.Context, args LookupArgs) Result {
 	if err != nil {
 		return t.failed(SiteLookup, target.Host, err)
 	}
+	if t.hooks.Looked != nil {
+		t.hooks.Looked(lookup, result)
+	}
 	out := mcpfmt.Format(result, args.Render) + mcpfmt.CatalogFallback(lookup, result) + mcpfmt.PinsMissing(lookup, result)
 	if args.Budget > 0 && result.Response.Status == protocol.StatusOK {
 		out += lookupexpand.Expand(ctx, lookupexpand.Input{

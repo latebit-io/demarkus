@@ -23,6 +23,7 @@ func (g *Gateway) toolBodies() (*marktools.Tools, error) {
 	return marktools.New(g.dispatcher, marktools.Hooks{
 		Resolve: resolveToolTarget,
 		Seen:    g.fetchSeen,
+		Looked:  g.lookedUp,
 		Writer:  g.toolWriter,
 		Agent:   mcpbind.ClientName,
 		User:    toolUser,
