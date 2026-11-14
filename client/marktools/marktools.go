@@ -100,6 +100,8 @@ type Hooks struct {
 	Floor func(ctx context.Context, target Target) (Target, bool)
 	// Seen dedups full bodies mark_fetch already returned; nil never dedups.
 	Seen SeenStore
+	// Looked observes each answered mark_lookup; nil observes none.
+	Looked func(req fetch.LookupRequest, r fetch.Result)
 	// ErrText words a failed backend call; nil says "<site> failed: <err>".
 	ErrText func(site Site, host string, err error) string
 	// Warnf reports a best effort step that failed; nil is log.Printf.

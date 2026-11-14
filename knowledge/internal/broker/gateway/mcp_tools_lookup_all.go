@@ -114,6 +114,7 @@ func (g *Gateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolReque
 		}
 		return matches[i].path < matches[j].path
 	})
+	g.logLookupAll(&report, &lookup)
 	report.matches = matches[:min(limit, len(matches))]
 	merged := report.result()
 	text := mcpfmt.Format(merged, mcpfmt.LookupAll.Options(&req))
