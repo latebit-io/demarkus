@@ -45,10 +45,13 @@ func TestListShapes(t *testing.T) {
 }
 
 func TestLookupShapes(t *testing.T) {
-	row := &LookupRow{Path: "/a_b.md", Anchor: "sec-1", Importance: 0.5, Title: "T|itle\nmore", Tags: []string{"x", "y"}, Snippet: "hit"}
+	row := &LookupRow{Path: "/a_b.md", Anchor: "sec-1", Importance: 0.5, Title: "T|itle\nmore", Tags: []string{"x", "y"}, Snippet: "hit", Pins: []string{"/s.md/v2", "https://h/o/r/tree/abc1234/x_y"}}
 	tests := []struct{ name, got, want string }{
-		{"catalog row drops snippet", LookupRowLine(row, false), "| /a\\_b.md#sec-1 | 0.50 | T\\|itle more | x, y |\n"},
-		{"body row", LookupRowLine(row, true), "| /a\\_b.md#sec-1 | 0.50 | T\\|itle more | x, y | hit |\n"},
+		{"catalog row drops snippet and pins", LookupRowLine(row, Columns{}), "| /a\\_b.md#sec-1 | 0.50 | T\\|itle more | x, y |\n"},
+		{"body row", LookupRowLine(row, Columns{Snippet: true}), "| /a\\_b.md#sec-1 | 0.50 | T\\|itle more | x, y | hit |\n"},
+		{"pins row", LookupRowLine(row, Columns{Pins: true}), "| /a\\_b.md#sec-1 | 0.50 | T\\|itle more | x, y | /s.md/v2, https://h/o/r/tree/abc1234/x\\_y |\n"},
+		{"body and pins row", LookupRowLine(row, Columns{Snippet: true, Pins: true}), "| /a\\_b.md#sec-1 | 0.50 | T\\|itle more | x, y | hit | /s.md/v2, https://h/o/r/tree/abc1234/x\\_y |\n"},
+		{"pins header", LookupHeader(Columns{Snippet: true, Pins: true}), "| Path | Importance | Title | Tags | Snippet | Pins |\n|------|------------|-------|------|---------|------|\n"},
 		{"heading", LookupHeading("q", "/s/"), "\n# Lookup matches for \"q\" in /s/\n\n"},
 	}
 	for _, tt := range tests {
@@ -58,7 +61,7 @@ func TestLookupShapes(t *testing.T) {
 			}
 		})
 	}
-	if strings.Count(LookupHeader(true), "|")-strings.Count(LookupHeader(false), "|") != 2 {
+	if strings.Count(LookupHeader(Columns{Snippet: true}), "|")-strings.Count(LookupHeader(Columns{}), "|") != 2 {
 		t.Error("body header must add exactly one column to both header lines")
 	}
 }

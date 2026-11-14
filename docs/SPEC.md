@@ -545,6 +545,7 @@ auth: <raw-token>\n
 - `filter` (OPTIONAL): a comma-separated list of `key=value` predicates applied **before** ranking. Each predicate matches a declared metadata value by exact equality, except the built-ins `modified-after` and `modified-before`, which compare an RFC 3339 timestamp (or date) against the document's modification time, and `based-on`, which matches a document whose `rel-based-on` metadata pins the given document path or URL, at any version, or anything under it when the value is a directory, a repository URL, or a GitHub `tree` or `blob` URL, which names a path in the repository whatever its ref. A document MUST satisfy all predicates to be included. A malformed `filter` MUST return `bad-request`.
 - `limit` (OPTIONAL): the maximum number of results. Default **10**. Servers MUST impose a hard cap (RECOMMENDED **1000**).
 - `match` (OPTIONAL): `catalog` (default), `body` or `similar`. Selects catalog mode, body match, or similar match (see **Similar match** below). Any other value MUST return `bad-request`, whether or not the server implements body or similar match. A server that does not implement body match MUST accept `body` and answer in catalog mode, echoing `match: catalog`; the same holds for `similar`. A server that predates the key answers in catalog mode with no echo; a server that predates `similar` refuses it as an unknown value.
+- `pins` (OPTIONAL): `true` or `false` (default). `true` adds a last column, `Pins`: the row's `rel-based-on` values as written, in written order, joined by `, `; under a `based-on` filter, only the values a `based-on` predicate matches. Any other value MUST return `bad-request`. A server that predates the key answers without the column, so a client MUST read the columns from the header row.
 - `auth` (OPTIONAL): a token used to authorise results on read-auth-protected paths (see Read authorisation below).
 
 **Success response** (`ok`):
@@ -562,7 +563,7 @@ matches: <count>
 | /docs/gateway | 0.50 | Gateway overview | go |
 ```
 
-The body MUST be a markdown table, one row per result. Columns are the document's server-relative path, its importance, its title, and its declared tags. The `Path` is server-relative; clients compose the full `mark://authority/path` URL from the logical authority used for the request, never from an overridden dial address. The response MUST NOT include document body content; clients FETCH the documents they choose. `matches` is the number of rows returned.
+The body MUST be a markdown table, one row per result. Columns are the document's server-relative path, its importance, its title, and its declared tags, then any column a request key adds (`Snippet`, then `Pins`). The `Path` is server-relative; clients compose the full `mark://authority/path` URL from the logical authority used for the request, never from an overridden dial address. The response MUST NOT include document body content; clients FETCH the documents they choose. `matches` is the number of rows returned.
 
 When the request carries `match`, the response MUST echo the mode it answered in as `match: catalog` or `match: body`. A request without `match` is answered exactly as before this key existed, with no `match` header. Clients MUST treat a response without `match: body` as a catalog answer, whatever the request asked for. A server that implements body match MAY answer a body request in catalog mode, echoing `match: catalog`, while its section index is being built or trails the committed state the request reads; it MUST NOT echo `match: body` for an answer from a section index that misses part of that state.
 
@@ -578,7 +579,7 @@ When the request carries `match`, the response MUST echo the mode it answered in
 
 **Taint cap**: a document whose metadata carries `source-trust: tainted` (value compared case-insensitively) was written after its session read untrusted content; a client hook stamps it. Its status weight MUST NOT exceed 0.8: `accepted` or `stable` on a tainted document weighs as provisional. The label only tightens ranking; its absence, or any other value, grants nothing.
 
-`tags`, `importance`, and `title` are the only publisher metadata keys a server interprets for LOOKUP; all other declared metadata remains opaque and is reachable only through `filter`.
+`tags`, `importance`, and `title` are the publisher metadata keys LOOKUP matches and shows; `source-trust` (the taint cap above) and `classifier` (§8.1) only cap the status weight; `rel-based-on` is read by the `based-on` filter and shown by `pins`; all other declared metadata remains opaque and is reachable only through `filter`.
 
 **Read authorisation**: a server that enforces per-path read authorisation MUST filter LOOKUP results so that documents the requester is not authorised to read are omitted entirely; no path, no title, no tags, and not counted in `matches`. Knowledge of a subject MUST NOT reveal the existence of protected documents.
 
@@ -592,7 +593,7 @@ When the request carries `match`, the response MUST echo the mode it answered in
 - Ordering: importance and the status weight are a prior among matching sections and MUST NOT cause a non-matching section to appear. Ties break by ascending path, then ascending anchor. Everything else about order is implementation-defined.
 - Read authorisation: per-row filtering exactly as in catalog mode, by the document's path.
 
-The response header echoes `match: body` and the table gains a fifth column:
+The response header echoes `match: body` and the table gains a `Snippet` column after `Tags` (before `Pins`, when requested):
 
 ```text
 | Path | Importance | Title | Tags | Snippet |
@@ -602,7 +603,7 @@ The response header echoes `match: body` and the table gains a fifth column:
 
 `Path` is the document path followed by `#` and the section anchor; a bare-path section carries the document path alone. `Title` is the document title, a `›` separator, and the heading text; a bare-path row carries the document title alone. `Snippet` is one line of at most 240 bytes drawn from the section text with markup removed; truncation MUST fall on a UTF-8 rune boundary so the snippet is valid UTF-8. In body mode `matches` counts section rows. The response MUST NOT include more of the body than the snippet.
 
-**Similar match** (`match: similar`): an OPTIONAL capability over the same section index. The request body is a draft document; the answer is the current, non-archived documents under the scope that satisfy `filter` and that the draft repeats, judged by the server's near-duplicate rule (a token-overlap measure of the draft against each document's own text and each of its sections; the thresholds are implementation-defined and the same ones the server's write gate warns by). `query` is OPTIONAL and only names the report. A request without a body MUST return `bad-request`. The response echoes `match: similar` and uses the five-column body-match table: one row per document, `Path` with `#` and the section anchor when a section of a longer document holds the draft, `Title` as in body mode, and `Snippet` the verdict with its score, `near-duplicate (<share>)` or `contained (<share>)`, never document text. Rows are ordered strongest verdict first. A draft too short to judge answers `matches: 0`. While the section index does not cover the request's snapshot the server answers `match: catalog` with an empty table, which a client MUST treat as no answer, not as absence.
+**Similar match** (`match: similar`): an OPTIONAL capability over the same section index. The request body is a draft document; the answer is the current, non-archived documents under the scope that satisfy `filter` and that the draft repeats, judged by the server's near-duplicate rule (a token-overlap measure of the draft against each document's own text and each of its sections; the thresholds are implementation-defined and the same ones the server's write gate warns by). `query` is OPTIONAL and only names the report. A request without a body MUST return `bad-request`. The response echoes `match: similar` and uses the body-match table: one row per document, `Path` with `#` and the section anchor when a section of a longer document holds the draft, `Title` as in body mode, and `Snippet` the verdict with its score, `near-duplicate (<share>)` or `contained (<share>)`, never document text. Rows are ordered strongest verdict first. A draft too short to judge answers `matches: 0`. While the section index does not cover the request's snapshot the server answers `match: catalog` with an empty table, which a client MUST treat as no answer, not as absence.
 
 Servers that implement body match SHOULD list `lookup-match: catalog, body` (with `, similar` when they implement similar match) under a `## Capabilities` heading in their agent manifest (`/.well-known/agent-manifest.md`, §11.8). The manifest is author-published and advisory; the `match` echo on the response is the authoritative signal.
 
@@ -795,6 +796,7 @@ The following status values are reserved for future use:
 | `filter` | LOOKUP | Comma-separated `key=value` | Predicates applied before ranking. Exact match on declared metadata, plus built-ins `modified-after` / `modified-before` / `based-on`. |
 | `limit` | LOOKUP | Decimal integer | Maximum number of results. Default 10; server-capped (RECOMMENDED 1000). |
 | `match` | LOOKUP | `catalog`, `body` or `similar` | Catalog mode (default), body match or similar match (§6.7). Unknown values are `bad-request` on every server; a server without body or similar match answers those in catalog mode. |
+| `pins` | LOOKUP | `true` or `false` | Add the `Pins` column: each row's `rel-based-on` values; under a `based-on` filter, only those it matches. Default false. |
 | `page-size` | LIST | Decimal integer | Maximum entries in this page. Default and hard maximum 1000. |
 | `cursor` | LIST | Opaque string | Continuation from the preceding page of the same directory and archive mode. |
 | `include-archived` | LIST | `true` or `false` | Include archived documents and directories containing only archived documents. Default false. |

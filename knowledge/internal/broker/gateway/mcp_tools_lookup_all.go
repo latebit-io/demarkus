@@ -18,6 +18,7 @@ import (
 	"github.com/latebit-io/demarkus/client/memory/lookupexpand"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/render"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -36,6 +37,7 @@ type lookupAllMatch struct {
 	tags       string
 	anchor     string // body mode: section anchor without '#'
 	snippet    string // body mode only
+	pins       string // pins requested: the wire's comma-separated cell
 	rank       int
 }
 
@@ -48,6 +50,7 @@ type lookupAllWorldResult struct {
 	world   string
 	matches []lookupAllMatch
 	catalog bool // body match requested, world answered from its catalog
+	pins    bool // the world's table had a Pins column
 	err     error
 }
 
@@ -91,12 +94,13 @@ func (g *Gateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolReque
 	if _, err := protocol.ParseMatch(lookup.Match); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	results := g.lookupAllWorlds(ctx, worlds, lookup)
-	matches, failures, catalogWorlds := collectLookupAllResults(results)
-	if len(failures) == len(worlds) && len(worlds) > 0 {
-		return mcp.NewToolResultError("lookup failed in all worlds: " + formatLookupAllFailureList(failures)), nil
+	report := lookupAllReport{query: query, worlds: len(worlds), columns: render.Columns{Snippet: lookup.Match == fetch.MatchBody, Pins: fetch.BasedOn(lookup.Filter)}}
+	report.collect(g.lookupAllWorlds(ctx, worlds, lookup))
+	if len(report.failures) == len(worlds) && len(worlds) > 0 {
+		return mcp.NewToolResultError("lookup failed in all worlds: " + formatLookupAllFailureList(report.failures)), nil
 	}
 
+	matches := report.matches
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].rank != matches[j].rank {
 			return matches[i].rank < matches[j].rank
@@ -109,13 +113,7 @@ func (g *Gateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolReque
 		}
 		return matches[i].path < matches[j].path
 	})
-	if len(matches) > limit {
-		matches = matches[:limit]
-	}
-	report := lookupAllReport{
-		query: query, worlds: len(worlds), matches: matches, failures: failures,
-		body: lookup.Match == fetch.MatchBody, catalogWorlds: catalogWorlds,
-	}
+	report.matches = matches[:min(limit, len(matches))]
 	merged := report.result()
 	text := mcpfmt.Format(merged, mcpfmt.LookupAll.Options(&req))
 	if budget := mcpfmt.Budget(&req); budget > 0 {
@@ -139,8 +137,9 @@ type lookupAllReport struct {
 	worlds        int
 	matches       []lookupAllMatch
 	failures      []lookupAllFailure
-	body          bool     // body match requested: render the Snippet column
-	catalogWorlds []string // worlds that answered a body request from the catalog
+	columns       render.Columns // Snippet: body match requested; Pins: pins requested
+	catalogWorlds []string       // worlds that answered a body request from the catalog
+	pinlessWorlds []string       // worlds whose table had no Pins column
 }
 
 // lookupAllWorlds sends lookup to every world; Host is filled in per world.
@@ -166,10 +165,14 @@ func (g *Gateway) lookupAllWorlds(ctx context.Context, worlds []core.WorldConfig
 					err = fmt.Errorf("status %s%s", result.Response.Status, lookupFailureDetail(result.Response.Body))
 				}
 				var matches []lookupAllMatch
+				gotPins := false
 				if err == nil {
-					matches, err = parseLookupAllMatches(world.Name, result)
+					matches, gotPins, err = parseLookupAllMatches(world.Name, result)
 				}
-				results <- lookupAllWorldResult{world: world.Name, matches: matches, catalog: fetch.AnsweredFromCatalog(lookup, result), err: err}
+				results <- lookupAllWorldResult{
+					world: world.Name, matches: matches, err: err,
+					catalog: fetch.AnsweredFromCatalog(lookup, result), pins: gotPins,
+				}
 			}
 		})
 	}
@@ -226,28 +229,33 @@ func completeCanceledLookupResults(out []lookupAllWorldResult, worlds []core.Wor
 	return out
 }
 
-func collectLookupAllResults(results []lookupAllWorldResult) (matches []lookupAllMatch, failures []lookupAllFailure, catalogWorlds []string) {
+// collect files each world's matches, failure and notes into the report.
+func (r *lookupAllReport) collect(results []lookupAllWorldResult) {
 	for _, result := range results {
 		if result.err != nil {
-			failures = append(failures, lookupAllFailure{world: result.world, err: result.err})
+			r.failures = append(r.failures, lookupAllFailure{world: result.world, err: result.err})
 			continue
 		}
 		if result.catalog {
-			catalogWorlds = append(catalogWorlds, result.world)
+			r.catalogWorlds = append(r.catalogWorlds, result.world)
 		}
-		matches = append(matches, result.matches...)
+		if r.columns.Pins && !result.pins {
+			r.pinlessWorlds = append(r.pinlessWorlds, result.world)
+		}
+		r.matches = append(r.matches, result.matches...)
 	}
-	sort.Slice(failures, func(i, j int) bool { return failures[i].world < failures[j].world })
-	sort.Strings(catalogWorlds)
-	return matches, failures, catalogWorlds
+	sort.Slice(r.failures, func(i, j int) bool { return r.failures[i].world < r.failures[j].world })
+	sort.Strings(r.catalogWorlds)
+	sort.Strings(r.pinlessWorlds)
 }
 
-func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch, error) {
+// parseLookupAllMatches reads one world's table; pins reports its Pins column.
+func parseLookupAllMatches(world string, result fetch.Result) (matches []lookupAllMatch, pins bool, err error) {
 	table, err := lookuptable.ParseTable(result.Response.Body)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	matches := make([]lookupAllMatch, 0, len(table.Rows))
+	matches = make([]lookupAllMatch, 0, len(table.Rows))
 	for i, row := range table.Rows {
 		matches = append(matches, lookupAllMatch{
 			world:      world,
@@ -258,15 +266,16 @@ func parseLookupAllMatches(world string, result fetch.Result) ([]lookupAllMatch,
 			title:      row.Title,
 			tags:       row.Tags,
 			snippet:    row.Snippet,
+			pins:       row.Pins,
 			rank:       i,
 		})
 	}
 
 	want, err := strconv.Atoi(result.Response.Metadata["matches"])
 	if err != nil || want != len(matches) {
-		return nil, fmt.Errorf("malformed LOOKUP response: matches metadata does not match table")
+		return nil, false, fmt.Errorf("malformed LOOKUP response: matches metadata does not match table")
 	}
-	return matches, nil
+	return matches, table.Pins, nil
 }
 
 // result shapes the merged report as a wire-style response so the shared
@@ -282,7 +291,7 @@ func (r *lookupAllReport) result() fetch.Result {
 		"failed":    strconv.Itoa(len(r.failures)),
 		"matches":   strconv.Itoa(len(r.matches)),
 	}
-	if r.body {
+	if r.columns.Snippet {
 		meta["match"] = fetch.MatchBody
 	}
 	return fetch.Result{Response: protocol.Response{Status: status, Metadata: meta, Body: r.table()}}
@@ -291,8 +300,9 @@ func (r *lookupAllReport) result() fetch.Result {
 func (r *lookupAllReport) table() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Lookup matches for \"%s\" across readable worlds\n\n", lookuptable.Escape(r.query))
-	b.WriteString(lookuptable.Header(r.body))
-	for _, match := range r.matches {
+	b.WriteString(render.LookupHeader(r.columns))
+	for i := range r.matches {
+		match := &r.matches[i]
 		// The anchor rides after escaping: a slug cannot break the table,
 		// and the agent hands the row to mark_fetch as is.
 		location := lookuptable.Escape(qualifiedLookupURL(match.world, match.path))
@@ -301,13 +311,19 @@ func (r *lookupAllReport) table() string {
 		}
 		fmt.Fprintf(&b, "| %s | %.2f | %s | %s |", location, match.importance,
 			lookuptable.Escape(match.title), lookuptable.Escape(match.tags))
-		if r.body {
+		if r.columns.Snippet {
 			fmt.Fprintf(&b, " %s |", lookuptable.Escape(match.snippet))
+		}
+		if r.columns.Pins {
+			fmt.Fprintf(&b, " %s |", lookuptable.Escape(match.pins))
 		}
 		b.WriteString("\n")
 	}
 	if len(r.catalogWorlds) > 0 {
 		b.WriteString(mcpfmt.Note("answered from the catalog (no body match): " + strings.Join(r.catalogWorlds, ", ")))
+	}
+	if len(r.pinlessWorlds) > 0 {
+		b.WriteString(mcpfmt.Note(mcpfmt.PinsMissingNote + ": " + strings.Join(r.pinlessWorlds, ", ")))
 	}
 	if len(r.failures) > 0 {
 		b.WriteString("\n## World failures\n\n| World | Error |\n|-------|-------|\n")

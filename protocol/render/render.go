@@ -73,7 +73,8 @@ func EntryLine(name string, isDir bool) string {
 	return "- [" + display + "](" + link + ")\n"
 }
 
-// LookupRow is one LOOKUP match. Anchor and Snippet are body mode only.
+// LookupRow is one LOOKUP match. Anchor and Snippet are body mode only;
+// Pins only when the request asked for them.
 type LookupRow struct {
 	Path       string
 	Anchor     string
@@ -81,6 +82,13 @@ type LookupRow struct {
 	Title      string
 	Tags       []string
 	Snippet    string
+	Pins       []string
+}
+
+// Columns names the optional LOOKUP columns, which follow Tags in this order.
+type Columns struct {
+	Snippet bool // body and similar mode
+	Pins    bool // the request carried pins: true
 }
 
 // LookupHeading opens a LOOKUP result.
@@ -88,12 +96,16 @@ func LookupHeading(query, scope string) string {
 	return "\n# Lookup matches for \"" + Escape(query) + "\" in " + Escape(scope) + "\n\n"
 }
 
-// LookupHeader is the table header and separator; body mode adds Snippet.
-func LookupHeader(body bool) string {
-	if body {
-		return "| Path | Importance | Title | Tags | Snippet |\n|------|------------|-------|------|---------|\n"
+// LookupHeader is the table header and separator.
+func LookupHeader(c Columns) string {
+	header, separator := "| Path | Importance | Title | Tags |", "|------|------------|-------|------|"
+	if c.Snippet {
+		header, separator = header+" Snippet |", separator+"---------|"
 	}
-	return "| Path | Importance | Title | Tags |\n|------|------------|-------|------|\n"
+	if c.Pins {
+		header, separator = header+" Pins |", separator+"------|"
+	}
+	return header + "\n" + separator + "\n"
 }
 
 // JoinRow renders already escaped cells as one table line, no newline.
@@ -103,7 +115,7 @@ func JoinRow(cells []string) string {
 
 // LookupRowLine renders one match. The anchor follows the escaped path
 // unescaped: a slug cannot break the table, and clients fetch path#anchor next.
-func LookupRowLine(row *LookupRow, body bool) string {
+func LookupRowLine(row *LookupRow, c Columns) string {
 	location := EscapeCell(row.Path)
 	if row.Anchor != "" {
 		location += "#" + row.Anchor
@@ -114,8 +126,11 @@ func LookupRowLine(row *LookupRow, body bool) string {
 		EscapeCell(row.Title),
 		EscapeCell(strings.Join(row.Tags, ", ")),
 	}
-	if body {
+	if c.Snippet {
 		cells = append(cells, EscapeCell(row.Snippet))
+	}
+	if c.Pins {
+		cells = append(cells, EscapeCell(strings.Join(row.Pins, ", ")))
 	}
 	return JoinRow(cells) + "\n"
 }

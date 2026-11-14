@@ -52,6 +52,18 @@ type LookupRequest struct {
 	Body               string // MatchSimilar: the draft the server judges
 }
 
+// BasedOn reports whether a LOOKUP filter has a based-on clause; such a
+// request asks for the Pins column, which an older server omits.
+func BasedOn(filter string) bool {
+	for clause := range strings.SplitSeq(filter, ",") {
+		key, _, _ := strings.Cut(clause, "=")
+		if strings.TrimSpace(key) == "based-on" {
+			return true
+		}
+	}
+	return false
+}
+
 // WriteRequest is a PUBLISH or an APPEND. ExpectedVersion is the optimistic
 // lock: 0 creates only, above 0 must equal the current version, below 0 skips
 // the check (PUBLISH only). The zero value therefore never overwrites.
@@ -122,6 +134,9 @@ func (r LookupRequest) Request() (protocol.Request, error) {
 	}
 	if r.Match != "" {
 		req.Metadata["match"] = r.Match
+	}
+	if BasedOn(r.Filter) {
+		req.Metadata["pins"] = "true"
 	}
 	req.Body = r.Body
 	return req, nil

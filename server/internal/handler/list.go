@@ -42,17 +42,6 @@ func parseListPageSize(raw string) (int, error) {
 	return size, nil
 }
 
-func parseListIncludeArchived(raw string) (bool, error) {
-	switch raw {
-	case "", "false":
-		return false, nil
-	case "true":
-		return true, nil
-	default:
-		return false, errors.New("include-archived must be true or false")
-	}
-}
-
 func encodeListCursor(reqPath string, includeArchived bool, after string) (string, error) {
 	if after == "" {
 		return "", errors.New("LIST cursor requires a non-empty entry name")
@@ -148,7 +137,7 @@ func (h *Handler) handleList(ctx context.Context, call *readCall) {
 		return
 	}
 	reqPath := req.Path
-	includeArchived, err := parseListIncludeArchived(req.Metadata["include-archived"])
+	includeArchived, err := protocol.ParseFlag("include-archived", req.Metadata["include-archived"])
 	if err != nil {
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 		return

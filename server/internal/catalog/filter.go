@@ -83,6 +83,27 @@ func BasedOn(source string) Predicate {
 	return Predicate{kind: predBasedOn, value: source}
 }
 
+// Pins lists the entry's rel-based-on values as written, in written order:
+// those a based-on predicate in preds matches, or all when preds has none.
+// It parses again rather than keep the values, so only result rows pay.
+func (e *Entry) Pins(preds []Predicate) []string {
+	all := !slices.ContainsFunc(preds, func(p Predicate) bool { return p.kind == predBasedOn })
+	var out []string
+	for _, pin := range provenance.Parse(e.Metadata[provenance.Key]) {
+		target := pin.Target(e.Path)
+		if all || slices.ContainsFunc(preds, func(p Predicate) bool { return p.pinMatches(target) }) {
+			out = append(out, pin.Ref)
+		}
+	}
+	return out
+}
+
+// pinMatches reports whether p is a based-on predicate a pin on target meets:
+// the one rule the filter and the Pins column share.
+func (p Predicate) pinMatches(target string) bool {
+	return p.kind == predBasedOn && provenance.Under(target, p.value)
+}
+
 // parseFilterTime accepts an RFC 3339 timestamp or a bare date (YYYY-MM-DD).
 func parseFilterTime(s string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
@@ -123,7 +144,7 @@ func (p Predicate) matches(e *Entry) bool {
 	case predModBefore:
 		return e.Modified.Before(p.t)
 	case predBasedOn:
-		return slices.ContainsFunc(e.pins, func(target string) bool { return provenance.Under(target, p.value) })
+		return slices.ContainsFunc(e.pins, p.pinMatches)
 	default:
 		return false
 	}

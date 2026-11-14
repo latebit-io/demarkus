@@ -11,6 +11,7 @@ import (
 
 	"github.com/latebit-io/demarkus/client/fetch"
 	"github.com/latebit-io/demarkus/client/lookuptable"
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -185,6 +186,23 @@ func CapTableTags(table string) string {
 // Note renders the trailer surfaces append to a tool result.
 func Note(text string) string {
 	return "\nnote: " + text + "\n"
+}
+
+// PinsMissingNote is what a tool reports when it asked for pins and the
+// table came back without them.
+const PinsMissingNote = "pins not reported, server predates them; a row's fetch shows its rel-based-on"
+
+// PinsMissing is the note appended when req asked for pins and the ok
+// answer's table has no Pins column; else "". No table at all gets no note:
+// the agent sees the body as sent.
+func PinsMissing(req fetch.LookupRequest, r fetch.Result) string {
+	if !fetch.BasedOn(req.Filter) || r.Response.Status != protocol.StatusOK {
+		return ""
+	}
+	if columns, ok := lookuptable.HeaderOf(r.Response.Body); !ok || columns.Pins {
+		return ""
+	}
+	return Note(PinsMissingNote)
 }
 
 // CatalogFallbackNote is what a tool reports when body match was requested
