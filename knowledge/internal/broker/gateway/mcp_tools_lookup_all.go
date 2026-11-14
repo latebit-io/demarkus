@@ -89,12 +89,13 @@ func (g *Gateway) handleMarkLookupAll(ctx context.Context, req mcp.CallToolReque
 		Limit:  limit,
 		Match:  req.GetString("match", ""),
 	}
+	lookup.Pins = fetch.BasedOn(lookup.Filter)
 	// The client validates per request, which never runs with no readable
 	// worlds and would otherwise surface as an all-worlds failure.
 	if _, err := protocol.ParseMatch(lookup.Match); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	report := lookupAllReport{query: query, worlds: len(worlds), columns: render.Columns{Snippet: lookup.Match == fetch.MatchBody, Pins: fetch.BasedOn(lookup.Filter)}}
+	report := lookupAllReport{query: query, worlds: len(worlds), columns: render.Columns{Snippet: lookup.Match == fetch.MatchBody, Pins: lookup.Pins}}
 	report.collect(g.lookupAllWorlds(ctx, worlds, lookup))
 	if len(report.failures) == len(worlds) && len(worlds) > 0 {
 		return mcp.NewToolResultError("lookup failed in all worlds: " + formatLookupAllFailureList(report.failures)), nil

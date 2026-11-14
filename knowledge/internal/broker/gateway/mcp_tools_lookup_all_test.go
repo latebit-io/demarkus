@@ -405,6 +405,9 @@ func TestHandleMarkLookupAllBasedOnCarriesPinsAndFlagsPinlessWorlds(t *testing.T
 	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "team-b", Namespace: "team-b"})
 	d := &fakeDispatcher{
 		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+			if !r.Pins {
+				t.Errorf("%s: pins not asked for a based-on filter", r.Host)
+			}
 			if r.Host == "team-a" {
 				row := render.LookupRow{Path: "/auth.md", Importance: 0.9, Title: "Auth", Tags: []string{"auth"}, Pins: []string{"https://github.com/o/r/tree/abc1234/auth"}}
 				return fetch.Result{Response: render.Lookup{Query: "q", Scope: "/", Pins: true}.Response([]render.LookupRow{row})}, nil
@@ -435,7 +438,10 @@ func TestHandleMarkLookupAllBasedOnCarriesPinsAndFlagsPinlessWorlds(t *testing.T
 
 func TestHandleMarkLookupAllWithoutBasedOnShowsNoPins(t *testing.T) {
 	d := &fakeDispatcher{
-		LookupFn: func(context.Context, fetch.LookupRequest) (fetch.Result, error) {
+		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+			if r.Pins {
+				t.Errorf("pins asked for filter %q", r.Filter)
+			}
 			return lookupResult(authRow), nil
 		},
 	}

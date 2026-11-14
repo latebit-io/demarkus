@@ -136,6 +136,9 @@ func TestLookupBasedOnAsksPins(t *testing.T) {
 		}
 		tools := newTools(t, backend, directHooks())
 		got := tools.Lookup(t.Context(), marktools.LookupArgs{URL: "/", Query: "*", Filter: "based-on=https://github.com/o/r", Render: mcpfmt.Options{Envelope: &mcpfmt.Lookup}})
+		if len(backend.LookupCalls) != 1 || !backend.LookupCalls[0].Pins {
+			t.Fatalf("served=%v: calls = %+v, want pins asked", served, backend.LookupCalls)
+		}
 		hasPins := strings.Contains(got.Text, "| https://github.com/o/r/commit/abc1234 |")
 		hasNote := strings.Contains(got.Text, mcpfmt.PinsMissingNote)
 		if got.IsError || hasPins != served || hasNote == served {

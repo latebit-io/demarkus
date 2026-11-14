@@ -50,10 +50,11 @@ type LookupRequest struct {
 	Limit              int    // max results; <= 0 lets the server choose
 	Match              string // MatchCatalog (default), MatchBody or MatchSimilar
 	Body               string // MatchSimilar: the draft the server judges
+	Pins               bool   // ask for the Pins column; an older server omits it
 }
 
-// BasedOn reports whether a LOOKUP filter has a based-on clause; such a
-// request asks for the Pins column, which an older server omits.
+// BasedOn reports whether a LOOKUP filter has a based-on clause, for a
+// caller deciding whether to ask for pins.
 func BasedOn(filter string) bool {
 	for clause := range strings.SplitSeq(filter, ",") {
 		key, _, _ := strings.Cut(clause, "=")
@@ -135,7 +136,7 @@ func (r LookupRequest) Request() (protocol.Request, error) {
 	if r.Match != "" {
 		req.Metadata["match"] = r.Match
 	}
-	if BasedOn(r.Filter) {
+	if r.Pins {
 		req.Metadata["pins"] = "true"
 	}
 	req.Body = r.Body

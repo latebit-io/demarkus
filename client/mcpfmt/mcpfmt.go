@@ -196,7 +196,7 @@ const PinsMissingNote = "pins not reported, server predates them; a row's fetch 
 // answer's table has no Pins column; else "". No table at all gets no note:
 // the agent sees the body as sent.
 func PinsMissing(req fetch.LookupRequest, r fetch.Result) string {
-	if !fetch.BasedOn(req.Filter) || r.Response.Status != protocol.StatusOK {
+	if !req.Pins || r.Response.Status != protocol.StatusOK {
 		return ""
 	}
 	if columns, ok := lookuptable.HeaderOf(r.Response.Body); !ok || columns.Pins {

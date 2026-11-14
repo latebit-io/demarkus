@@ -73,10 +73,10 @@ func TestLookupPins(t *testing.T) {
 			t.Errorf("BasedOn(%q) = %v, want %v", filter, got, want)
 		}
 	}
-	for filter, pins := range map[string]bool{"tag=x": false, "based-on=/a.md": true} {
-		req, err := (LookupRequest{Scope: "/", Query: "*", Filter: filter}).Request()
+	for _, pins := range []bool{false, true} {
+		req, err := (LookupRequest{Scope: "/", Query: "*", Filter: "based-on=/a.md", Pins: pins}).Request()
 		if _, sent := req.Metadata["pins"]; err != nil || sent != pins || (pins && req.Metadata["pins"] != "true") {
-			t.Errorf("filter %q: request %+v, %v", filter, req.Metadata, err)
+			t.Errorf("pins=%v: request %+v, %v", pins, req.Metadata, err)
 		}
 	}
 }

@@ -108,6 +108,7 @@ func (t *Tools) Lookup(ctx context.Context, args LookupArgs) Result {
 	lookup := fetch.LookupRequest{
 		Host: target.Host, Scope: target.Path, Token: t.readToken(ctx, target.Host),
 		Query: args.Query, Filter: args.Filter, Limit: args.Limit, Match: args.Match,
+		Pins: fetch.BasedOn(args.Filter),
 	}
 	result, err := t.backend.Lookup(ctx, lookup)
 	if err != nil {
