@@ -10,7 +10,7 @@ Publish only when the user asks or confirms, through the `knowledge-promote` ski
 
 ## Repo drift
 
-Once, at the start of substantive work in a repo with a remote, per connected system: `mark_lookup_all` with `query: "*"`, `filter: "based-on=<remote as https URL>"`, `limit: 5`. `mark_fetch` each row; per `rel-based-on` pin on this repo, count the changes since its `<commit>` under its `<path>` (git: `git rev-list --count <commit>..HEAD [-- <path>]`). Lead the reply with:
+Once, at the start of substantive work in a repo with a remote, per connected system: `mark_lookup_all` with `query: "*"`, `filter: "based-on=<remote as https URL>"`, `limit: 5`. `mark_fetch` each row; per `rel-based-on` pin on this repo, count the changes since its `<commit>` under its `<path>` (git, root-relative from any directory: `git rev-list --count <commit>..HEAD [-- ':/<path>']`). Lead the reply with:
 - each document with a count above 0, and the count; update only on request
 - 5 rows: only the top 5 checked, more may be pinned
 - `status: partial`, no worlds counted, or a failed lookup, fetch or count: what went unchecked
