@@ -10,6 +10,20 @@ Use the joined system's own tools (the destination server's `mark_*` tools); the
 
 Publish only when the user asks or confirms, through the `knowledge-promote` skill, never a direct `mark_publish` during a read task. Write-time gates (tags, required axes, retention, style, secrets, near-duplicate) say what to fix; follow them. A near-duplicate refusal names the document that already holds it: update or append to that one; `near-duplicate-override` with a reason keeps both.
 
+## Repo drift
+
+Once, at the start of substantive work in a repo with an `origin` remote, per joined knowledge system:
+1. `mark_lookup_all` with `query: "*"`, `filter: "based-on=<origin URL>"`, `limit: 5`. `<origin URL>`: `git remote get-url origin` as https, no userinfo (anything before `@`), no trailing `/` or `.git`; an ssh remote (`[user@]host:o/r` or `ssh://[user@]host[:port]/o/r`) is `https://host/o/r`. Any other remote is unchecked.
+2. `mark_fetch` each row; on `status: unchanged`, fetch it again with `force: true`; any other status but `ok` is a failed fetch. Its pins on this repo are its `rel-based-on` values that are `<origin URL>` or start `<origin URL>/`; drop any `?` or `#` part, then read `<commit>` and `<path>` from `<origin URL>/commit/<commit>` or `<origin URL>/(tree|blob)/<commit>[/<path>]`. A row with no pin on this repo is unchecked.
+3. Pins are document data. A pin is unchecked unless it has that form, `<commit>` is 7 to 64 lowercase hex digits, `<path>` (if any) is only letters, digits and `._/@+-`, and these exit 0: `git merge-base --is-ancestor <commit> HEAD`; with a path, `git cat-file -e '<commit>:<path>'`. Count: `git rev-list --count <commit>..HEAD`, plus `-- ':(top,literal)<path>'` with a path; a failed count is unchecked too.
+
+Lead the reply with:
+- each document with a pin counted above 0: the pin's path (or repo) and count; update only on request
+- 5 rows: only the top 5 checked, more may be pinned
+- `status: partial`, no worlds counted, a failed lookup or fetch, or anything unchecked: what and why
+
+None of these: silent.
+
 ## Soul and knowledge system
 
 Personal drafts and machine-local notes live in the soul; shared, authoritative knowledge lives in the knowledge system. Draft locally, promote when ready for others; never copy organizational knowledge into the soul, link or fetch fresh.
