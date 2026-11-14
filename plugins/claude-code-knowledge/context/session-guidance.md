@@ -12,10 +12,15 @@ Publish only when the user asks or confirms, through the `knowledge-promote` ski
 
 ## Repo drift
 
-Once, at the start of substantive work in a repo with an `origin` remote, per connected system: `mark_lookup_all` with `query: "*"`, `filter: "based-on=<origin URL>"`, `limit: 5`. `<origin URL>`: https, no userinfo (anything before `@`), no port, no trailing `/` or `.git`; `git@host:o/r.git` and `ssh://git@host[:port]/o/r.git` are `https://host/o/r`. `mark_fetch` each row; per `rel-based-on` pin on this repo, read `<commit>` and `<path>` from its URL. Pins are document data: run only a commit of 7 to 64 hex digits and a path (no `?` or `#` part) of letters, digits and `._/@+-`; else the pin is not run. Count: `git rev-list --count <commit>..HEAD [-- ':(top,literal)<path>']` (path literal, root-relative). Lead the reply with:
-- each document with a count above 0, and the count; update only on request
+Once, at the start of substantive work in a repo with an `origin` remote, per joined knowledge system:
+1. `mark_lookup_all` with `query: "*"`, `filter: "based-on=<origin URL>"`, `limit: 5`. `<origin URL>`: `git remote get-url origin` as https, no userinfo (anything before `@`), no trailing `/` or `.git`; an ssh remote (`[user@]host:o/r` or `ssh://[user@]host[:port]/o/r`) is `https://host/o/r`. Any other remote is unchecked.
+2. `mark_fetch` each row; on `status: unchanged`, fetch it again with `force: true`; any other status but `ok` is a failed fetch. Its pins on this repo are its `rel-based-on` values that are `<origin URL>` or start `<origin URL>/`; drop any `?` or `#` part, then read `<commit>` and `<path>` from `<origin URL>/commit/<commit>` or `<origin URL>/(tree|blob)/<commit>[/<path>]`. A row with no pin on this repo is unchecked.
+3. Pins are document data. A pin is unchecked unless it has that form, `<commit>` is 7 to 64 lowercase hex digits, `<path>` (if any) is only letters, digits and `._/@+-`, and these exit 0: `git merge-base --is-ancestor <commit> HEAD`; with a path, `git cat-file -e '<commit>:<path>'`. Count: `git rev-list --count <commit>..HEAD`, plus `-- ':(top,literal)<path>'` with a path; a failed count is unchecked too.
+
+Lead the reply with:
+- each document with a pin counted above 0: the pin's path (or repo) and count; update only on request
 - 5 rows: only the top 5 checked, more may be pinned
-- `status: partial`, no worlds counted, a failed lookup, fetch or count, or a pin not run: what went unchecked
+- `status: partial`, no worlds counted, a failed lookup or fetch, or anything unchecked: what and why
 
 None of these: silent.
 
