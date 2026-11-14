@@ -10,6 +10,10 @@ Use the joined system's own tools (`mcp__<slug>__mark_*`); the server's instruct
 
 Publish only when the user asks or confirms, through the `knowledge-promote` skill, never a direct `mark_publish` during a read task. Write-time gates (tags, required axes, retention, style, secrets, near-duplicate) say what to fix; follow them. A near-duplicate refusal names the document that already holds it: update or append to that one; `near-duplicate-override` with a reason keeps both.
 
+## Repo drift
+
+Once, at the start of substantive work in a repo with a remote, per connected system: `mark_lookup_all` with `query: "*"`, `filter: "based-on=<remote as https URL>"`, `limit: 5`. `mark_fetch` each row; per `rel-based-on` pin on this repo, count the changes since its `<commit>` under its `<path>` (git: `git rev-list --count <commit>..HEAD [-- <path>]`). Above 0: lead the reply with the document that may be stale and the count; update only on request. No rows, or all 0: silent. Failed lookup, fetch or count: say what went unchecked.
+
 ## Soul and knowledge system
 
 Personal drafts and machine-local notes live in the soul; shared, authoritative knowledge lives in the knowledge system. Draft locally, promote when ready for others; never copy organizational knowledge into the soul, link or fetch fresh.
