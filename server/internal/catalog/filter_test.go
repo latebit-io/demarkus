@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,5 +104,32 @@ func TestBasedOnMatchesPinsAtAnyVersion(t *testing.T) {
 	}
 	if MatchesAll(&Entry{Path: "/b.md"}, []Predicate{BasedOn("/adr/0006.md")}) {
 		t.Error("a document without pins matched")
+	}
+}
+
+func TestEntryPinsListsWhatBasedOnMatched(t *testing.T) {
+	e := &Entry{Path: "/notes/a.md", Metadata: map[string]string{
+		"rel-based-on": "../adr/0006.md/v5, https://github.com/o/r/tree/abcdef0/internal, https://example.com/spec?v=2#s",
+	}}
+	e.Prepare()
+	tests := []struct {
+		filter string
+		want   string
+	}{
+		{"", "../adr/0006.md/v5, https://github.com/o/r/tree/abcdef0/internal, https://example.com/spec?v=2#s"},
+		{"tag=go", "../adr/0006.md/v5, https://github.com/o/r/tree/abcdef0/internal, https://example.com/spec?v=2#s"},
+		{"based-on=/adr/", "../adr/0006.md/v5"},
+		{"based-on=/adr/,based-on=https://github.com/o/r", "../adr/0006.md/v5, https://github.com/o/r/tree/abcdef0/internal"},
+		{"based-on=https://example.com/spec?v=2#s", "https://example.com/spec?v=2#s"},
+		{"based-on=/elsewhere/", ""},
+	}
+	for _, tt := range tests {
+		preds, err := ParseFilter(tt.filter)
+		if err != nil {
+			t.Fatalf("ParseFilter(%q): %v", tt.filter, err)
+		}
+		if got := strings.Join(e.Pins(preds), ", "); got != tt.want {
+			t.Errorf("Pins(%q) = %q, want %q", tt.filter, got, tt.want)
+		}
 	}
 }

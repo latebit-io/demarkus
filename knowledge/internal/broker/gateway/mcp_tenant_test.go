@@ -146,8 +146,8 @@ func assertNoWorldTraffic(t *testing.T, d *fakeDispatcher, world string) {
 	for _, c := range calls.Archive {
 		touched("archive", c.Host, c.Path)
 	}
-	for _, c := range calls.Lookup {
-		touched("lookup", c.Host, c.Scope)
+	for i := range calls.Lookup {
+		touched("lookup", calls.Lookup[i].Host, calls.Lookup[i].Scope)
 	}
 	for _, c := range calls.Publish {
 		touched("publish", c.Host, c.Path)

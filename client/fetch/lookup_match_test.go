@@ -61,3 +61,22 @@ func TestSimilarNeedsADraft(t *testing.T) {
 		t.Errorf("similar request = %+v, %v; want the draft as the body and no query", req, err)
 	}
 }
+
+func TestLookupPins(t *testing.T) {
+	for filter, want := range map[string]bool{
+		"based-on=https://github.com/o/r": true,
+		"tag=a, based-on = /b.md":         true,
+		"tag=based-on":                    false,
+		"":                                false,
+	} {
+		if got := BasedOn(filter); got != want {
+			t.Errorf("BasedOn(%q) = %v, want %v", filter, got, want)
+		}
+	}
+	for _, pins := range []bool{false, true} {
+		req, err := (LookupRequest{Scope: "/", Query: "*", Filter: "based-on=/a.md", Pins: pins}).Request()
+		if _, sent := req.Metadata["pins"]; err != nil || sent != pins || (pins && req.Metadata["pins"] != "true") {
+			t.Errorf("pins=%v: request %+v, %v", pins, req.Metadata, err)
+		}
+	}
+}

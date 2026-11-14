@@ -23,6 +23,7 @@ func RunLookupHandlerConformance(t *testing.T, factory LookupFactory) {
 		{"BodyUnknownModeBadRequest", testHandlerBodyUnknownMode},
 		{"BodyReadAuthFiltering", testHandlerBodyReadAuth},
 		{"BodyFallbackEchoesCatalog", testHandlerBodyFallback},
+		{"PinsColumn", testHandlerPinsColumn},
 	}
 	for _, st := range subtests {
 		t.Run(st.name, func(t *testing.T) {
@@ -102,6 +103,43 @@ func testHandlerCatalogByteIdentical(t *testing.T, b LookupBackend) {
 	}
 	if plain.Metadata["matches"] != "1" || echoed.Metadata["matches"] != "1" {
 		t.Errorf("matches = %q / %q, want 1", plain.Metadata["matches"], echoed.Metadata["matches"])
+	}
+}
+
+// testHandlerPinsColumn: pins: true adds the Pins column, the values a
+// based-on filter matches or all of them; a bad value is refused.
+func testHandlerPinsColumn(t *testing.T, b LookupBackend) {
+	h := NewHandler(b)
+	pins := "https://github.com/o/r/tree/abc1234/auth, /notes/src.md/v2, https://github.com/o/other/commit/def5678"
+	publishDoc(t, h, "/notes/auth.md", "# Auth\n\nsection text\n", map[string]string{"tags": "auth", "rel-based-on": pins})
+
+	resp := lookup(t, h, "/", map[string]string{"query": "*", "filter": "based-on=https://github.com/o/r", "pins": "true"})
+	for _, want := range []string{
+		"| Path | Importance | Title | Tags | Pins |",
+		"| /notes/auth.md | 0.50 | Auth | auth | https://github.com/o/r/tree/abc1234/auth |\n",
+	} {
+		if !strings.Contains(resp.Body, want) {
+			t.Errorf("based-on pins: body lacks %q:\n%s", want, resp.Body)
+		}
+	}
+
+	resp = lookup(t, h, "/", map[string]string{"query": "auth", "pins": "true"})
+	if want := "| auth | https://github.com/o/r/tree/abc1234/auth, /notes/src.md/v2, https://github.com/o/other/commit/def5678 |\n"; !strings.Contains(resp.Body, want) {
+		t.Errorf("all pins: body lacks %q:\n%s", want, resp.Body)
+	}
+
+	resp = lookup(t, h, "/", map[string]string{"query": "section", "match": "body", "pins": "true"})
+	if !strings.Contains(resp.Body, "| Path | Importance | Title | Tags | Snippet | Pins |") || !strings.Contains(resp.Body, "| section text | "+pins+" |\n") {
+		t.Errorf("body mode: Pins does not follow Snippet:\n%s", resp.Body)
+	}
+
+	resp = lookup(t, h, "/", map[string]string{"query": "*", "filter": "based-on=/elsewhere/", "pins": "true"})
+	if resp.Metadata["matches"] != "0" || !strings.Contains(resp.Body, "| Path | Importance | Title | Tags | Pins |") {
+		t.Errorf("empty result lost the Pins header: matches %q\n%s", resp.Metadata["matches"], resp.Body)
+	}
+
+	if resp := lookup(t, h, "/", map[string]string{"query": "auth", "pins": "yes"}); resp.Status != protocol.StatusBadRequest {
+		t.Errorf("pins yes: status %q, want bad-request", resp.Status)
 	}
 }
 

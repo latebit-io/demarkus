@@ -242,7 +242,7 @@ reads.
 | --- | --- | --- | --- |
 | `url` | string | yes | Scope: `mark://{worldName}/` for the whole world, or a directory like `mark://{worldName}/adr/`. A document URL is refused with a pointer to `mark_fetch` and its directory. |
 | `query` | string | yes | Subject; matched against tags and titles (min 2 chars). |
-| `filter` | string | no | Comma-separated `key=value`; built-ins `tag=`, `modified-after=`, `modified-before=`, `based-on=` (documents whose `rel-based-on` pins a document, directory, repository URL or GitHub tree/blob path, any version). |
+| `filter` | string | no | Comma-separated `key=value`; built-ins `tag=`, `modified-after=`, `modified-before=`, `based-on=` (documents whose `rel-based-on` pins a document, directory, repository URL or GitHub tree/blob path, any version). With `based-on=` the rows gain a `Pins` column: the pins it matched. A server that predates it sends none, and a note says so. |
 | `limit` | number | no | Max results (server default 10, cap 1000). |
 | `match` | string | no | `catalog` (default) or `body`. |
 
@@ -260,7 +260,7 @@ world fails, the tool returns an error.
 | --- | --- | --- | --- |
 | `query` | string | yes | Subject; matched against tags and titles (min 2 chars), or `*`. |
 | `scope` | string | no | Server-relative directory scope applied to every world (default `/`); a document path is refused. |
-| `filter` | string | no | Comma-separated `key=value` predicates applied in every world. |
+| `filter` | string | no | Comma-separated `key=value` predicates applied in every world. With `based-on=` the rows gain a `Pins` column as in `mark_lookup`; worlds that sent none are listed in a note. |
 | `limit` | number | no | Global max results (default 10, cap 1000). |
 | `match` | string | no | `catalog` (default) or `body`. Body rows merge by the same ordinal rule and carry a `Snippet` column; worlds that answered from their catalog are listed in a note. |
 

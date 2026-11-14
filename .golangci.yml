@@ -28,9 +28,9 @@ linters:
         - exitAfterDefer
       settings:
         # Request structs go by value so a callee cannot change the caller's
-        # request; the largest is 104 bytes of string headers.
+        # request; the largest, fetch.LookupRequest, is 128 bytes.
         hugeParam:
-          sizeThreshold: 128
+          sizeThreshold: 136
     revive:
       rules:
         - name: blank-imports

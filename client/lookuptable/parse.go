@@ -5,10 +5,12 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/latebit-io/demarkus/protocol/render"
 )
 
-// Row is one parsed LOOKUP match, cells unescaped. Tags stay the wire's
-// comma-separated text; Anchor and Snippet are body mode only.
+// Row is one parsed LOOKUP match, cells unescaped. Tags and Pins stay the
+// wire's comma-separated text; Anchor and Snippet are body mode only.
 type Row struct {
 	Path       string
 	Anchor     string
@@ -16,31 +18,26 @@ type Row struct {
 	Title      string
 	Tags       string
 	Snippet    string
+	Pins       string
 }
 
-// Table is a parsed LOOKUP result; Body reports the five column form.
+// Table is a parsed LOOKUP result and the optional columns it carried: a
+// server that ignored pins: true sends no Pins.
 type Table struct {
 	Rows []Row
-	Body bool
+	render.Columns
 }
 
 // ParseTable reads the result table strictly: a missing header, a row of the
 // wrong width, a bad importance or a relative path is an error, not a skip.
 func ParseTable(body string) (Table, error) {
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
-	header, columns := -1, 0
-	for i, line := range lines {
-		cells, ok := SplitRow(line)
-		if ok && IsHeader(cells) {
-			header, columns = i, len(cells)
-			break
-		}
-	}
-	if header < 0 {
+	header, columns, width := findHeader(lines)
+	if width == 0 {
 		return Table{}, fmt.Errorf("malformed LOOKUP response: result table missing")
 	}
 
-	table := Table{Body: columns == BodyColumns}
+	table := Table{Columns: columns}
 	for _, line := range lines[header+1:] {
 		if strings.TrimSpace(line) == "" {
 			if len(table.Rows) > 0 {
@@ -55,7 +52,7 @@ func ParseTable(body string) (Table, error) {
 		if IsSeparator(cells) {
 			continue
 		}
-		row, err := parseRow(cells, columns)
+		row, err := parseRow(cells, columns, width)
 		if err != nil {
 			return Table{}, err
 		}
@@ -64,9 +61,9 @@ func ParseTable(body string) (Table, error) {
 	return table, nil
 }
 
-func parseRow(cells []string, columns int) (Row, error) {
-	if len(cells) != columns {
-		return Row{}, fmt.Errorf("malformed LOOKUP response: row has %d columns, header %d", len(cells), columns)
+func parseRow(cells []string, columns render.Columns, width int) (Row, error) {
+	if len(cells) != width {
+		return Row{}, fmt.Errorf("malformed LOOKUP response: row has %d columns, header %d", len(cells), width)
 	}
 	importance, err := strconv.ParseFloat(Unescape(cells[1]), 64)
 	if err != nil || math.IsNaN(importance) || math.IsInf(importance, 0) || importance < 0 || importance > 1 {
@@ -83,8 +80,11 @@ func parseRow(cells []string, columns int) (Row, error) {
 		Title:      Unescape(cells[2]),
 		Tags:       Unescape(cells[3]),
 	}
-	if columns == BodyColumns {
-		row.Snippet = Unescape(cells[4])
+	if columns.Snippet {
+		row.Snippet = Unescape(cells[catalogColumns])
+	}
+	if columns.Pins {
+		row.Pins = Unescape(cells[len(cells)-1])
 	}
 	return row, nil
 }

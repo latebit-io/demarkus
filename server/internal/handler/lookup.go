@@ -26,8 +26,9 @@ const (
 	maxLookupTerms = 32
 )
 
-// lookupRows converts catalog results into the rows protocol/render draws.
-func lookupRows(results []catalog.Result) []render.LookupRow {
+// lookupRows converts catalog results into the rows protocol/render draws;
+// with pins, each row carries the pins the filter matched.
+func lookupRows(results []catalog.Result, spec *lookupSpec) []render.LookupRow {
 	rows := make([]render.LookupRow, 0, len(results))
 	for i := range results {
 		r := &results[i]
@@ -35,14 +36,18 @@ func lookupRows(results []catalog.Result) []render.LookupRow {
 		if r.Hit.Verdict != neardup.None {
 			snippet = r.Hit.Why()
 		}
-		rows = append(rows, render.LookupRow{
+		row := render.LookupRow{
 			Path:       r.Path,
 			Anchor:     r.Anchor,
 			Importance: r.Importance,
 			Title:      r.DisplayTitle(),
 			Tags:       r.Tags,
 			Snippet:    snippet,
-		})
+		}
+		if spec.pins {
+			row.Pins = r.Pins(spec.preds)
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }
@@ -54,6 +59,7 @@ type lookupSpec struct {
 	matchCarried bool
 	limit        int
 	preds        []catalog.Predicate
+	pins         bool
 }
 
 // parseLookup validates the request's keys.
@@ -92,7 +98,11 @@ func parseLookup(req protocol.Request) (lookupSpec, error) {
 	if err != nil {
 		return spec, err
 	}
-	return lookupSpec{query: query, mode: mode, matchCarried: matchCarried, limit: min(limit, maxLookupResults), preds: preds}, nil
+	pins, err := protocol.ParseFlag("pins", req.Metadata["pins"])
+	if err != nil {
+		return spec, err
+	}
+	return lookupSpec{query: query, mode: mode, matchCarried: matchCarried, limit: min(limit, maxLookupResults), preds: preds, pins: pins}, nil
 }
 
 func (h *Handler) handleLookup(ctx context.Context, call *readCall) {
@@ -155,5 +165,5 @@ func (h *Handler) handleLookup(ctx context.Context, call *readCall) {
 	if spec.matchCarried {
 		echo = string(mode)
 	}
-	h.writeResponse(w, render.LookupResponse(spec.query, req.Path, lookupRows(rows), echo))
+	h.writeResponse(w, render.Lookup{Query: spec.query, Scope: req.Path, Match: echo, Pins: spec.pins}.Response(lookupRows(rows, &spec)))
 }

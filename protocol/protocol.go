@@ -211,6 +211,18 @@ func ParseMatch(match string) (string, error) {
 // are sections with a snippet.
 func MatchSectioned(match string) bool { return match == MatchBody || match == MatchSimilar }
 
+// ParseFlag validates a boolean request key (include-archived, pins): true,
+// false, or absent for false.
+func ParseFlag(key, raw string) (bool, error) {
+	switch raw {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s must be true or false", key)
+}
+
 // Downgraded reports a lookup answered in a lesser mode than it asked for:
 // the server had no section index for the snapshot and said so.
 func Downgraded(requested, answered string) bool {

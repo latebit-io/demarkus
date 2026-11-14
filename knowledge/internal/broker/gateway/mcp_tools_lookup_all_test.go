@@ -305,7 +305,7 @@ func TestHandleMarkLookupAllTiebreaksOnStandingWeightedImportance(t *testing.T) 
 func TestParseLookupAllMatchesRejectsMetadataDrift(t *testing.T) {
 	result := lookupResult(authRow)
 	result.Response.Metadata["matches"] = "2"
-	if _, err := parseLookupAllMatches("team-a", result); err == nil {
+	if _, _, err := parseLookupAllMatches("team-a", result); err == nil {
 		t.Fatal("expected malformed response error")
 	}
 }
@@ -313,7 +313,7 @@ func TestParseLookupAllMatchesRejectsMetadataDrift(t *testing.T) {
 func TestParseLookupAllMatchesRejectsOutOfRangeImportance(t *testing.T) {
 	result := lookupResult(authRow)
 	result.Response.Body = strings.Replace(result.Response.Body, "| 0.90 |", "| 1.10 |", 1)
-	if _, err := parseLookupAllMatches("team-a", result); err == nil {
+	if _, _, err := parseLookupAllMatches("team-a", result); err == nil {
 		t.Fatal("expected malformed response error")
 	}
 }
@@ -400,6 +400,63 @@ func TestHandleMarkLookupAllBodyMatchMergesAndFlagsCatalogWorlds(t *testing.T) {
 	}
 }
 
+func TestHandleMarkLookupAllBasedOnCarriesPinsAndFlagsPinlessWorlds(t *testing.T) {
+	cfg := mcpTestConfig()
+	cfg.Worlds = append(cfg.Worlds, core.WorldConfig{Name: "team-b", Namespace: "team-b"})
+	d := &fakeDispatcher{
+		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+			if !r.Pins {
+				t.Errorf("%s: pins not asked for a based-on filter", r.Host)
+			}
+			if r.Host == "team-a" {
+				row := render.LookupRow{Path: "/auth.md", Importance: 0.9, Title: "Auth", Tags: []string{"auth"}, Pins: []string{"https://github.com/o/r/tree/abc1234/auth"}}
+				return fetch.Result{Response: render.Lookup{Query: "q", Scope: "/", Pins: true}.Response([]render.LookupRow{row})}, nil
+			}
+			// team-b predates pins: no column.
+			return lookupResult(render.LookupRow{Path: "/old.md", Importance: 0.5, Title: "Old", Tags: []string{"auth"}}), nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, cfg, d)
+	res, err := g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", map[string]any{
+		"query": "*", "filter": "tag=auth, based-on=https://github.com/o/r",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkLookupAll: err %v res %+v", err, res)
+	}
+	text := toolResultText(t, res)
+	for _, want := range []string{
+		"| Path | Importance | Title | Tags | Pins |",
+		"| mark://team-a/auth.md | 0.90 | Auth | auth | https://github.com/o/r/tree/abc1234/auth |",
+		"| mark://team-b/old.md | 0.50 | Old | auth |  |",
+		"note: pins not reported, server predates them; a row's fetch shows its rel-based-on: team-b",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("response missing %q\nfull:\n%s", want, text)
+		}
+	}
+}
+
+func TestHandleMarkLookupAllWithoutBasedOnShowsNoPins(t *testing.T) {
+	d := &fakeDispatcher{
+		LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+			if r.Pins {
+				t.Errorf("pins asked for filter %q", r.Filter)
+			}
+			return lookupResult(authRow), nil
+		},
+	}
+	g := newGatewayWithDispatcher(t, mcpTestConfig(), d)
+	res, err := g.handleMarkLookupAll(withAliceClaims(context.Background()), callToolReq("mark_lookup_all", map[string]any{
+		"query": "auth", "filter": "tag=based-on",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("handleMarkLookupAll: err %v res %+v", err, res)
+	}
+	if text := toolResultText(t, res); strings.Contains(text, "Pins") {
+		t.Errorf("Pins column without a based-on filter:\n%s", text)
+	}
+}
+
 func TestHandleMarkLookupAllCapsTagsUnlessVerbose(t *testing.T) {
 	cfg := mcpTestConfig()
 	many := []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12"}
@@ -470,5 +527,20 @@ func TestHandleMarkLookupAllBudgetExpandsWithinTheWorld(t *testing.T) {
 	}
 	if text := toolResultText(t, res); len(fetched) != 0 || !strings.Contains(text, ">>> note: the table alone used") {
 		t.Errorf("a budget the table fills must fetch nothing; fetches %+v\n%s", fetched, text)
+	}
+}
+
+func TestLookupAllReportBodyAndPinsColumns(t *testing.T) {
+	r := lookupAllReport{query: "q", worlds: 1, columns: render.Columns{Snippet: true, Pins: true}, matches: []lookupAllMatch{
+		{world: "team-a", path: "/a.md", anchor: "intro", importance: 0.5, title: "A › Intro", tags: "x", snippet: "hit", pins: "https://github.com/o/r/commit/abc1234"},
+	}}
+	table := r.table()
+	for _, want := range []string{
+		"| Path | Importance | Title | Tags | Snippet | Pins |",
+		"| mark://team-a/a.md#intro | 0.50 | A › Intro | x | hit | https://github.com/o/r/commit/abc1234 |",
+	} {
+		if !strings.Contains(table, want) {
+			t.Errorf("table missing %q:\n%s", want, table)
+		}
 	}
 }

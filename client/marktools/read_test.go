@@ -124,6 +124,29 @@ func TestLookup(t *testing.T) {
 	}
 }
 
+// A based-on filter asks for pins; a server that predates them answers
+// without the column, and the tool says so.
+func TestLookupBasedOnAsksPins(t *testing.T) {
+	rows := []render.LookupRow{{Path: "/docs/a.md", Importance: 0.5, Title: "A", Tags: []string{"x"}, Pins: []string{"https://github.com/o/r/commit/abc1234"}}}
+	for _, served := range []bool{true, false} {
+		backend := &fetchtest.Client{
+			LookupFn: func(_ context.Context, r fetch.LookupRequest) (fetch.Result, error) {
+				return fetch.Result{Response: render.Lookup{Query: r.Query, Scope: r.Scope, Pins: served}.Response(rows)}, nil
+			},
+		}
+		tools := newTools(t, backend, directHooks())
+		got := tools.Lookup(t.Context(), marktools.LookupArgs{URL: "/", Query: "*", Filter: "based-on=https://github.com/o/r", Render: mcpfmt.Options{Envelope: &mcpfmt.Lookup}})
+		if len(backend.LookupCalls) != 1 || !backend.LookupCalls[0].Pins {
+			t.Fatalf("served=%v: calls = %+v, want pins asked", served, backend.LookupCalls)
+		}
+		hasPins := strings.Contains(got.Text, "| https://github.com/o/r/commit/abc1234 |")
+		hasNote := strings.Contains(got.Text, mcpfmt.PinsMissingNote)
+		if got.IsError || hasPins != served || hasNote == served {
+			t.Errorf("served=%v: Lookup = %q", served, got.Text)
+		}
+	}
+}
+
 // The server answers a document scope not-found, which reads as a missing
 // document; the tool refuses it first and names what to do instead.
 func TestLookupRefusesADocumentScope(t *testing.T) {
