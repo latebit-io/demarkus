@@ -39,3 +39,7 @@ Add a remote MCP server with the gateway URL; both support the same streamable H
 3. Recall with `mark_lookup` / `mark_fetch`; record with `mark_publish` / `mark_append`.
 
 With dynamic provisioning, a brand-new identity's first call creates the world and serves it in the same process; a replica that has not yet synced the registry answers "your memory world is being provisioned; try again in about a minute" until it has.
+
+## Getting your data out
+
+Hosted memory has no self-serve export yet: `demarkus okf export` reads a `mark://` server with a token, not a world behind OAuth. A local or self-hosted soul exports with it; see the [OKF codec](../client/index.md#open-knowledge-format-codec).
