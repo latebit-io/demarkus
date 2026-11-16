@@ -81,7 +81,6 @@ Files changed but nothing journaled? An end-of-session nudge asks for an entry.
 | `/soul-doctor` | Audit hygiene: broken links, orphans, untagged docs, duplicates |
 | `/soul-curate` | Reshape a document, or split one that outgrew a fetch |
 | `/soul-archive` | Archive a document or directory, history kept |
-| `/soul-export` | Save every document verbatim to local files |
 | `/soul-status` | Diagnose the connection |
 | `/soul-init` | Configure the local soul |
 | `/soul-join` | Add a remote or hosted soul and bind it to the project |
@@ -98,7 +97,7 @@ A soul need not be local.
 
 - **Your own server.** `/soul-join <join-url>` adds it and binds the project. `demarkus-token join` builds the URL.
 - **Hosted.** A knowledge system can also serve hosted memory: sign in and get a private world, one per person. Connect any MCP host to its `/mcp` URL. See [Memory gateway](../tools/memory-broker.md).
-- **Leave any time.** `/soul-export` (the `soul-export` prompt without the plugin) saves every document to local files.
+- **Export.** `demarkus okf export [-auth <token>] mark://<host>/ <dir>` saves every live document of a local or self-hosted soul, metadata included, as an OKF bundle that `demarkus okf import` reads back. The files are readable by other local users under the usual umask; to keep them private, create the directory first with `mkdir -m 700 <dir>`. Hosted memory has no self-serve export yet.
 
 ## Live example
 
@@ -128,7 +127,7 @@ demarkus-server -root ~/memory -tokens ~/memory/tokens.toml -port 6310
 
 Leave the directory empty; the agent builds the layout. Tell it the rules in your agent instructions: recall at start, tag every publish, journal at the end. For a remote server with real TLS, drop `-insecure`.
 
-With `-host` set, `demarkus-mcp` also serves the plugin's commands as MCP prompts of the same names: `soul`, `soul-context`, `soul-journal`, `soul-doctor`, `soul-curate`, `soul-archive`, `soul-export`, `promote`, `promote-scan` and `soul-refresh` (in Claude Desktop, the prompt picker). `promote` and `soul-refresh` reach a knowledge system added to the same host as its own MCP server.
+With `-host` set, `demarkus-mcp` also serves the plugin's commands as MCP prompts of the same names: `soul`, `soul-context`, `soul-journal`, `soul-doctor`, `soul-curate`, `soul-archive`, `promote`, `promote-scan` and `soul-refresh` (in Claude Desktop, the prompt picker). `promote` and `soul-refresh` reach a knowledge system added to the same host as its own MCP server.
 
 ## Related
 

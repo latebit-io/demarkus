@@ -53,18 +53,21 @@ func TestRepositoryCorpusRendersAllArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 84 rendered canonical prompts (four memory/knowledge pairs), the
-	// prompt targets' listed commands (gateway, mcp), and each brand's share,
-	// derived from the manifest and source tree rather than from the render.
+	// A plugin target renders its surface's templates, a prompt target
+	// (gateway, mcp) its listed commands, plus each brand's share; derived
+	// from the manifest and source tree rather than from the render.
 	spec, err := loadManifest(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical := 84
+	canonical := 0
 	for i := range spec.Targets {
-		if spec.Targets[i].ServesPrompts() {
-			canonical += len(spec.Targets[i].Commands)
+		tg := &spec.Targets[i]
+		if tg.ServesPrompts() {
+			canonical += len(tg.Commands)
+			continue
 		}
+		canonical += countTemplates(t, filepath.Join(root, "plugins", "prompt-source", tg.Surface))
 	}
 	want := canonical + expectedBrandArtifacts(t, root)
 	if len(artifacts) != want {
@@ -376,15 +379,36 @@ func expectedBrandArtifacts(t *testing.T, root string) int {
 	total := 0
 	for i := range spec.Brands {
 		base := bases[spec.Brands[i].Base]
-		total += countFiles(t, filepath.Join(root, "plugins", "prompt-source", base.Surface), func(name string) bool {
-			return strings.HasSuffix(name, ".tmpl")
-		})
+		total += countTemplates(t, filepath.Join(root, "plugins", "prompt-source", base.Surface))
 		for _, name := range brandCopiedRoots(&base) {
 			total += countFiles(t, filepath.Join(root, base.Output, name), func(string) bool { return true })
 		}
 		total += 2 // plugin.json and README
 	}
 	return total
+}
+
+// countTemplates counts a surface's rendered templates; partials are only
+// included by name, never rendered on their own.
+func countTemplates(t *testing.T, dir string) int {
+	t.Helper()
+	n := 0
+	err := filepath.WalkDir(dir, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() && entry.Name() == partialsDir {
+			return filepath.SkipDir
+		}
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tmpl") {
+			n++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func countFiles(t *testing.T, dir string, keep func(string) bool) int {
