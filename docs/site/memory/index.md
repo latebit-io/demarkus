@@ -97,7 +97,7 @@ A soul need not be local.
 
 - **Your own server.** `/soul-join <join-url>` adds it and binds the project. `demarkus-token join` builds the URL.
 - **Hosted.** A knowledge system can also serve hosted memory: sign in and get a private world, one per person. Connect any MCP host to its `/mcp` URL. See [Memory gateway](../tools/memory-broker.md).
-- **Export.** `demarkus okf export mark://<host>/ <dir>` saves every live document of a local or self-hosted soul, metadata included, as an OKF bundle that `demarkus okf import` reads back; add `-auth <token>` for a server that requires one. Hosted memory has no self-serve export yet.
+- **Export.** `demarkus okf export [-auth <token>] mark://<host>/ <dir>` saves every live document of a local or self-hosted soul, metadata included, as an OKF bundle that `demarkus okf import` reads back. The files are readable by other local users under the usual umask; to keep them private, create the directory first with `mkdir -m 700 <dir>`. Hosted memory has no self-serve export yet.
 
 ## Live example
 
