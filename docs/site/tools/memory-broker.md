@@ -12,7 +12,7 @@ The endpoint is the broker's MCP gateway URL, for example `https://memory.exampl
 
 ### Claude Desktop
 
-Settings > Connectors > Add custom connector, with the gateway URL. Desktop walks the OAuth flow in the browser; after that the memory tools (`mark_fetch`, `mark_publish`, ...) and prompts (`soul`, `soul-context`, `soul-journal`, `soul-doctor`, `soul-curate`, `soul-archive`, `soul-refresh`, `promote`, `promote-scan`, `soul-export`) appear, with the names and text of the plugin's slash commands. `promote` and `soul-refresh` reach your organization's knowledge system when it is added as its own connector. Usage guidance rides in the server instructions, so no client-side configuration is needed.
+Settings > Connectors > Add custom connector, with the gateway URL. Desktop walks the OAuth flow in the browser; after that the memory tools (`mark_fetch`, `mark_publish`, ...) and prompts (`soul`, `soul-context`, `soul-journal`, `soul-doctor`, `soul-curate`, `soul-archive`, `soul-refresh`, `promote`, `promote-scan`) appear, with the names and text of the plugin's slash commands. `promote` and `soul-refresh` reach your organization's knowledge system when it is added as its own connector. Usage guidance rides in the server instructions, so no client-side configuration is needed.
 
 ### ChatGPT
 
@@ -39,7 +39,3 @@ Add a remote MCP server with the gateway URL; both support the same streamable H
 3. Recall with `mark_lookup` / `mark_fetch`; record with `mark_publish` / `mark_append`.
 
 With dynamic provisioning, a brand-new identity's first call creates the world and serves it in the same process; a replica that has not yet synced the registry answers "your memory world is being provisioned; try again in about a minute" until it has.
-
-## Getting your data out
-
-The `soul-export` prompt walks every document in your world and saves each one verbatim to local files with a manifest. The memory is yours; the service is not a lock-in.

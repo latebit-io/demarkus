@@ -1798,7 +1798,7 @@ func testHandleArchive(t *testing.T, newBackend backendFactory) {
 		}
 	})
 
-	// soul-export finds an archived document's newest version this way.
+	// Archived: FETCH has no body, VERSIONS still answers.
 	t.Run("versions of archived document succeeds", func(t *testing.T) {
 		b := newBackend(t)
 		seedBackend(t, b, map[string]string{"doc.md": "# Content\n"})
