@@ -94,7 +94,8 @@ type Session struct {
 	Expires  time.Time
 }
 
-// Source yields the session for every open and renewal. Its error ends the
+// Source yields the session for every open and renewal. A renewal asks again
+// until a session expires later than the stream's. An open's error ends the
 // watch; the caller reopens from Cursor once a session is available again.
 type Source func(ctx context.Context) (Session, error)
 
@@ -115,9 +116,6 @@ type Watch struct {
 	source   Source
 	uri      string
 	coalesce bool
-	// expires is the last session's bearer expiry; only Open, then run,
-	// ever opens, so it needs no lock.
-	expires time.Time
 }
 
 // Open subscribes and returns once the server has acknowledged, or with its
@@ -165,7 +163,7 @@ type stream struct {
 	// dead stops a stream's later notices once it overflowed, ended or was
 	// replaced: what it dropped must come from the next stream, in order.
 	dead    atomic.Bool
-	renewAt time.Time
+	expires time.Time // the session's; set before the stream is followed
 }
 
 func (s *stream) acknowledge(n mcp.JSONRPCNotification) {
@@ -314,12 +312,7 @@ type ending struct {
 // follow waits on s until it ends. A renewal returns the stream that replaced
 // it; otherwise how it ended, or the error that ends the watch.
 func (w *Watch) follow(ctx context.Context, s *stream) (next *stream, end ending, err error) {
-	var renew <-chan time.Time
-	if !s.renewAt.IsZero() {
-		timer := time.NewTimer(time.Until(s.renewAt))
-		defer timer.Stop()
-		renew = timer.C
-	}
+	renew := renewal(s.expires)
 	for {
 		select {
 		case <-ctx.Done():
@@ -333,18 +326,23 @@ func (w *Watch) follow(ctx context.Context, s *stream) (next *stream, end ending
 			end, err := w.signalled(ctx, signal)
 			return nil, end, err
 		case <-renew:
-			renew = nil
-			successor, err := w.open(ctx)
-			switch {
-			case err == nil:
-				s.stop()
-				return successor, ending{}, nil
-			case retryable(err):
-				// Keep s; it renews at once when the server ends it.
-			default:
-				s.stop()
-				return nil, ending{}, err
+			// Only a bearer that outlives s's: a listen on the same one would
+			// be cut with it.
+			session, err := w.source(ctx)
+			if err == nil && session.Expires.After(s.expires) {
+				var successor *stream
+				if successor, err = w.listen(ctx, session); err == nil {
+					s.stop()
+					return successor, ending{}, nil
+				}
+				if !retryable(err) {
+					s.stop()
+					return nil, ending{}, err
+				}
 			}
+			// No successor yet: keep s and ask again while one could open before
+			// it lapses. A source still failing ends the watch at the reopen.
+			renew = renewal(s.expires)
 		}
 	}
 }
@@ -386,7 +384,7 @@ func (w *Watch) reopen(ctx context.Context, pace *fetch.Pace) (*stream, error) {
 	}
 }
 
-// Errors that end a watch whatever the retry policy.
+// Errors that end a watch at an open, whatever the retry policy.
 var (
 	errSource     = errors.New("listen source")
 	errNotModern  = errors.New("resource subscriptions need MCP " + mcp.ProtocolVersion20260728)
@@ -398,13 +396,18 @@ func retryable(err error) bool {
 	return fetch.RetryLater(err) && !errors.Is(err, errSource) && !errors.Is(err, errNotModern) && !errors.Is(err, errNotOffered) && !errors.Is(err, context.Canceled)
 }
 
-// open asks the source for a session and subscribes on it from the stream
-// cursor, returning once the server acknowledged.
+// open asks the source for a session and subscribes on it.
 func (w *Watch) open(ctx context.Context) (*stream, error) {
 	session, err := w.source(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errSource, err)
 	}
+	return w.listen(ctx, session)
+}
+
+// listen subscribes on session from the stream cursor, returning once the
+// server acknowledged.
+func (w *Watch) listen(ctx context.Context, session Session) (*stream, error) {
 	l := session.Listener
 	version := l.client.ProtocolVersion()
 	if !mcp.IsModernProtocol(version) {
@@ -434,15 +437,24 @@ func (w *Watch) open(ctx context.Context) (*stream, error) {
 		s.stop()
 		return nil, ctx.Err()
 	}
-	s.renewAt = renewTime(session.Expires, w.expires, time.Now())
-	w.expires = session.Expires
+	s.expires = session.Expires
 	return s, nil
 }
 
+// renewal fires when a stream whose bearer lapses at expires is to be
+// replaced, and never when renewTime names no time.
+func renewal(expires time.Time) <-chan time.Time {
+	at := renewTime(expires, time.Now())
+	if at.IsZero() {
+		return nil
+	}
+	return time.After(time.Until(at))
+}
+
 // renewTime is when a stream whose bearer lapses at expires is replaced: zero
-// when unknown, too close, or no fresher than the bearer it replaced.
-func renewTime(expires, previous, now time.Time) time.Time {
-	if expires.IsZero() || (!previous.IsZero() && !expires.After(previous)) {
+// when unknown or too close.
+func renewTime(expires, now time.Time) time.Time {
+	if expires.IsZero() {
 		return time.Time{}
 	}
 	life := expires.Sub(now)
