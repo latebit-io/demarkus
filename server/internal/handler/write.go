@@ -17,6 +17,7 @@ func (h *Handler) handleArchive(ctx context.Context, call *writeCall) {
 	w, req, tokenLabel := call.w, call.req, call.tokenLabel
 
 	archive, err := h.store.SetArchived(ctx, storagebackend.ArchiveRequest{Path: req.Path, Archived: true})
+	h = h.timed(call)
 	doc := archive.Document
 	if err != nil {
 		h.writeArchiveError(call, "ARCHIVE", err)
@@ -56,6 +57,7 @@ func (h *Handler) writeArchiveError(call *writeCall, operation string, err error
 func (h *Handler) handleUnarchive(ctx context.Context, call *writeCall) {
 	w, req, tokenLabel := call.w, call.req, call.tokenLabel
 	archive, err := h.store.SetArchived(ctx, storagebackend.ArchiveRequest{Path: req.Path})
+	h = h.timed(call)
 	if err != nil {
 		h.writeArchiveError(call, "UNARCHIVE", err)
 		return
@@ -110,8 +112,7 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 	}
 
 	doc, warnings, err := h.commit(ctx, call, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta})
-	h.logPrune("PUBLISH", req.Path, tokenLabel, doc)
-	h.logUnknownPrune("PUBLISH", call, err)
+	h = h.timed(call)
 	if err != nil {
 		h.writePublishError(call, expectedVersion, doc, err)
 		return
@@ -121,10 +122,19 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 	h.writeResponse(w, writtenResponse(doc, warnings))
 }
 
-// commit sends a PUBLISH or APPEND to the store. A store behind a write gate
+// commit sends a PUBLISH or APPEND to the store and audit-logs its pruning,
+// so the lines a caller logs after it are the write's outcome alone.
+func (h *Handler) commit(ctx context.Context, call *writeCall, write storagebackend.WriteRequest) (*storefmt.Document, []string, error) {
+	doc, warnings, err := h.send(ctx, call, write)
+	h.logPrune(call.req.Verb, call.req.Path, call.tokenLabel, doc)
+	h.logUnknownPrune(call.req.Verb, call, err)
+	return doc, warnings, err
+}
+
+// send hands the write to the store. A store behind a write gate
 // (backend.NotingStore) is told what the sender may read and answers with
 // what the gate let through; a bare one has no notes.
-func (h *Handler) commit(ctx context.Context, call *writeCall, write storagebackend.WriteRequest) (*storefmt.Document, []string, error) {
+func (h *Handler) send(ctx context.Context, call *writeCall, write storagebackend.WriteRequest) (*storefmt.Document, []string, error) {
 	appending := call.req.Verb == protocol.VerbAppend
 	noting, gated := h.store.(storagebackend.NotingStore)
 	switch {
@@ -269,8 +279,7 @@ func (h *Handler) handleAppend(ctx context.Context, call *writeCall) {
 	}
 
 	doc, warnings, err := h.commit(ctx, call, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta})
-	h.logPrune("APPEND", req.Path, tokenLabel, doc)
-	h.logUnknownPrune("APPEND", call, err)
+	h = h.timed(call)
 	if err != nil {
 		h.writeAppendError(call, expectedVersion, doc, err)
 		return

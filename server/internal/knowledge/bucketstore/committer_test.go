@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	mathrand "math/rand/v2"
 	"runtime"
@@ -254,6 +255,46 @@ func TestLosingStoreSignalsTheWinner(t *testing.T) {
 	if waited := time.Since(started); waited > loser.handoffWait/2 {
 		t.Errorf("the loser's next write took %v: it held a slot for the winner", waited)
 	}
+}
+
+// A store that loses a slot name to a peer logs the loss once: the name's
+// sequence, the writes it delayed and how often their batch has lost.
+func TestLostSlotIsLogged(t *testing.T) {
+	_, memory := newWritableStore(t)
+	barrier := &createBarrierStore{Store: memory, arrived: make(chan struct{}, 2), release: make(chan struct{})}
+	var logs lockedBuffer
+	site := &bucketSite{objects: barrier, noHedge: true, logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	left, right := site.open(t, 0), site.open(t, 0)
+	results := runConcurrentWrites(left, "/left", right, "/right")
+	barrier.releaseBoth(t)
+	for _, outcome := range collectWriteOutcomes(t, results) {
+		if outcome.err != nil {
+			t.Fatalf("write: %v", outcome.err)
+		}
+	}
+	slots := logSlots(t, memory, max(left.servedSequence(), right.servedSequence()))
+	want := fmt.Sprintf(`msg="slot lost" sequence=%d writes=1 losses=1`, slots[len(slots)-2].First)
+	if logged := logs.String(); strings.Count(logged, `msg="slot lost"`) != 1 || !strings.Contains(logged, want) {
+		t.Errorf("logs lack the loser's one line %q:\n%s", want, logged)
+	}
+}
+
+// lockedBuffer is a log sink stores write while a test reads it.
+type lockedBuffer struct {
+	mu   sync.Mutex
+	logs bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(line []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.logs.Write(line)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.logs.String()
 }
 
 // Follow tells a hint inside one of this store's newest slots, which only a

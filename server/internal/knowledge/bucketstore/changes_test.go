@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -256,8 +257,10 @@ type bucketSite struct {
 	// so it can drop a store and measure what it held.
 	hinted   bool
 	unpinned bool
-	mu       sync.Mutex
-	stores   []*Store
+	// logger is where their stores log; nil discards.
+	logger *slog.Logger
+	mu     sync.Mutex
+	stores []*Store
 }
 
 // open opens a store that closes when t ends, stopping its follow loop.
@@ -271,7 +274,7 @@ func (s *bucketSite) open(t *testing.T, ring int) *Store {
 func (s *bucketSite) openOn(t *testing.T, objects blob.Store, ring int) *Store {
 	t.Helper()
 	var self atomic.Pointer[Store]
-	options := Options{Logger: discardLogger, WorldID: testWorldID, ChangeRing: ring, Compaction: s.role, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger, shardBudget: s.shardBudget}
+	options := Options{Logger: cmp.Or(s.logger, discardLogger), WorldID: testWorldID, ChangeRing: ring, Compaction: s.role, followInterval: s.follow, noHedge: s.noHedge, trigger: s.trigger, shardBudget: s.shardBudget}
 	if s.hinted {
 		options.Committed = func(sequence int64) { s.hint(self.Load(), sequence) }
 	}

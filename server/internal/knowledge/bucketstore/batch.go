@@ -25,6 +25,7 @@ type batch struct {
 	staged   bool
 	creating bool
 	started  time.Time // when the create began: no later slot existed then
+	lost     int       // creates that lost their slot name to another store
 }
 
 // member is one request's part in a batch: an entry in the slot, or an answer
@@ -298,6 +299,8 @@ func (c *committer) stagedResult(b *batch, err error) {
 // the winner a peer is waiting behind that slot (Store.Follow).
 func (c *committer) rebase(b *batch, existing *blob.Object) {
 	store := c.store
+	b.lost++
+	store.logger.Info("slot lost", "sequence", b.slot.First, "writes", len(b.slot.Entries), "losses", b.lost)
 	winner, err := parseSlot(existing, store.worldID, b.slot.First)
 	if err != nil {
 		c.fail(b, fmt.Errorf("read slot %d: %w", b.slot.First, err))
