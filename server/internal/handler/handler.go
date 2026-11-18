@@ -221,13 +221,19 @@ type writeCall struct {
 	w          io.Writer
 	req        protocol.Request
 	tokenLabel string
-	started    time.Time // when the server took the request up
+	started    time.Time     // when the server took the request up
+	took       time.Duration // from started to the store's answer
 }
 
-// timed is h logging how long the write took: for the lines that record
-// what the store answered.
-func (h *Handler) timed(call *writeCall) *Handler {
-	return h.WithLogger(h.logger.With("duration_ms", time.Since(call.started).Milliseconds()))
+// answered marks the store's answer to the write.
+func (call *writeCall) answered() {
+	call.took = time.Since(call.started)
+}
+
+// outcome logs the line that records what the store answered, with how long
+// the write took; every other line stays on h.logger.
+func (h *Handler) outcome(call *writeCall) *slog.Logger {
+	return h.logger.With("duration_ms", call.took.Milliseconds())
 }
 
 // writeActivity names each write verb in configuration errors.

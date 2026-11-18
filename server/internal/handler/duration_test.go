@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -12,9 +14,9 @@ import (
 	"github.com/latebit-io/demarkus/server/internal/auth"
 )
 
-// A line logged once the store has answered a write says how long the write
-// took, on success and on refusal. The request line, a prune line and a
-// refusal made before the store do not.
+// The line that records what the store answered a write says how long the
+// write took, on success and on refusal. The request line, a prune line, a
+// refusal made before the store and a failed response send do not.
 func TestWriteOutcomeLogsDuration(t *testing.T) {
 	const secret = "test-duration-secret"
 	tokenStore := auth.NewTokenStore(map[string]auth.Token{
@@ -27,7 +29,9 @@ func TestWriteOutcomeLogsDuration(t *testing.T) {
 		"APPEND /doc.md" + head + "expected-version: 1\n---\nmore\n",
 		"ARCHIVE /doc.md" + head + "---\n",
 		"PUBLISH /doc.md" + head + "---\n",
+		"PUBLISH /doc.md" + head + "---\n",
 		"ARCHIVE /missing.md" + head + "---\n",
+		"APPEND /missing.md" + head + "expected-version: 1\n---\nmore\n",
 		"PUBLISH /doc.md" + head + "retention: 1\n---\n# Three\n",
 		"PUBLISH /doc.txt" + head + "---\nnot markdown\n",
 	}
@@ -35,8 +39,10 @@ func TestWriteOutcomeLogsDuration(t *testing.T) {
 	// the non-markdown path, refused before the store.
 	timed := map[string]bool{
 		"publish": true, "publish conflict": true, "append": true,
-		"archive": true, "unarchive": true, "archive failed": true,
+		"archive": true, "unarchive": true, "unarchive unchanged": true,
+		"archive failed": true, "append failed": true,
 		"request": false, "prune": false, "publish rejected": false,
+		"write response failed": false,
 	}
 
 	forEachBackend(t, func(t *testing.T, newBackend backendFactory) {
@@ -49,6 +55,7 @@ func TestWriteOutcomeLogsDuration(t *testing.T) {
 		for _, request := range requests {
 			h.HandleStream(context.Background(), newMockStream(request))
 		}
+		h.HandleStream(context.Background(), deafStream{strings.NewReader("PUBLISH /deaf.md" + head + "---\n# Unheard\n")})
 
 		logged := logs.String()
 		with, without := map[string]bool{}, map[string]bool{}
@@ -73,3 +80,9 @@ func TestWriteOutcomeLogsDuration(t *testing.T) {
 		}
 	})
 }
+
+// deafStream fails every write of the response.
+type deafStream struct{ io.Reader }
+
+func (deafStream) Write([]byte) (int, error) { return 0, errors.New("peer gone") }
+func (deafStream) Close() error              { return nil }

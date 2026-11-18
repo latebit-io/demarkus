@@ -260,7 +260,7 @@ func TestLosingStoreSignalsTheWinner(t *testing.T) {
 // A store that loses a slot name to a peer logs the loss once: the name's
 // sequence, the writes it delayed and how often their batch has lost.
 func TestLostSlotIsLogged(t *testing.T) {
-	_, memory := newWritableStore(t)
+	memory := initializedMemory(t)
 	barrier := &createBarrierStore{Store: memory, arrived: make(chan struct{}, 2), release: make(chan struct{})}
 	var logs lockedBuffer
 	site := &bucketSite{objects: barrier, noHedge: true, logger: slog.New(slog.NewTextHandler(&logs, nil))}

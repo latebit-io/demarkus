@@ -66,7 +66,7 @@ The knowledge server shares the server's request-handling and logging code, so p
 
 - Every world-scoped record carries a `world` field (the world name), and per-connection records add `authority` (the SNI name the client dialed); scope dashboards by `world`.
 - Startup, world-open, TLS, and GCS lifecycle events have their own messages (`configuration invalid`, `TLS setup failed`, `GCS client unavailable`, `world startup failed`); all are ERROR-level and fatal at startup.
-- A world on a bucket logs `slot lost` (INFO: `sequence`, `writes`, `losses`) when another replica created the log slot it was committing. `sequence` is the contested log sequence, `writes` the writes in the lost slot, `losses` how often that batch has lost. Share of writes delayed by replica contention: `sum(writes) by world where msg='slot lost'` against the world's write count.
+- A world on a bucket logs `slot lost` (INFO: `sequence`, `writes`, `losses`) when another replica created the log slot it was committing. `sequence` is the contested log sequence, `writes` the writes in the lost slot, `losses` how often that batch has lost. Write attempts delayed by replica contention: `sum(writes) by world where msg='slot lost'`. A write whose batch loses more than once counts each time, so against the world's write count this is a rate of delays, not a share of writes.
 
 ## Broker (`demarkus-knowledge`): field schema
 
