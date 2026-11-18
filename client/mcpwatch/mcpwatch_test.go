@@ -1,11 +1,14 @@
 package mcpwatch
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/latebit-io/demarkus/client/fetch"
@@ -207,21 +210,79 @@ func TestRetryable(t *testing.T) {
 func TestRenewTime(t *testing.T) {
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
-		name              string
-		expires, previous time.Time
-		want              time.Time
+		name    string
+		expires time.Time
+		want    time.Time
 	}{
 		{name: "unknown expiry", want: time.Time{}},
 		{name: "a 15 minute bearer renews a minute early", expires: now.Add(15 * time.Minute), want: now.Add(14 * time.Minute)},
 		{name: "a short bearer renews at half its life", expires: now.Add(10 * time.Second), want: now.Add(5 * time.Second)},
 		{name: "too close to renew ahead", expires: now.Add(time.Second)},
-		{name: "no fresher than the one it replaced", expires: now.Add(time.Hour), previous: now.Add(time.Hour)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := renewTime(tt.expires, tt.previous, now); !got.Equal(tt.want) {
+			if got := renewTime(tt.expires, now); !got.Equal(tt.want) {
 				t.Errorf("renewTime = %v, want %v", got, tt.want)
 			}
+		})
+	}
+}
+
+// A renewal with no bearer that outlives the stream's opens nothing, since a
+// listen on the same bearer would be cut with it: the stream is kept and the
+// source asked again until too little life is left to open a successor.
+func TestFollowKeepsTheStreamWithoutAFresherBearer(t *testing.T) {
+	tests := []struct {
+		name   string
+		answer func(expires time.Time) (Session, error)
+	}{
+		{"the same bearer", func(expires time.Time) (Session, error) { return Session{Expires: expires}, nil }},
+		{"an older bearer", func(expires time.Time) (Session, error) { return Session{Expires: expires.Add(-time.Second)}, nil }},
+		{"an unknown expiry", func(time.Time) (Session, error) { return Session{}, nil }},
+		{"no session", func(time.Time) (Session, error) { return Session{}, errors.New("no signed-in reader") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				expires := time.Now().Add(15 * time.Minute)
+				var asked atomic.Int32
+				// No session has a listener: a listen on one would panic.
+				w := &Watch{source: func(context.Context) (Session, error) {
+					asked.Add(1)
+					return tt.answer(expires)
+				}}
+				s := &stream{watch: w, cancel: func() {}, ended: make(chan struct{}), signal: make(chan string, 1), expires: expires}
+				returned := make(chan struct{})
+				go func() {
+					defer close(returned)
+					if next, end, err := w.follow(t.Context(), s); next != nil || err != nil || end != (ending{pause: endedPause}) {
+						t.Errorf("follow = %v, %+v, %v; want the stream's own end", next, end, err)
+					}
+				}()
+
+				time.Sleep(time.Until(expires) - renewBefore - time.Second)
+				synctest.Wait()
+				if got := asked.Load(); got != 0 {
+					t.Fatalf("source asked %d times before the renewal is due", got)
+				}
+				time.Sleep(time.Until(expires))
+				synctest.Wait()
+				before := asked.Load()
+				if before < 2 {
+					t.Errorf("source asked %d times, want it asked again after the first answer", before)
+				}
+				time.Sleep(time.Minute)
+				synctest.Wait()
+				if got := asked.Load(); got != before {
+					t.Errorf("source asked %d more times after the bearer lapsed", got-before)
+				}
+				if s.dead.Load() {
+					t.Fatal("the stream was stopped with no successor")
+				}
+
+				close(s.ended)
+				<-returned
+			})
 		})
 	}
 }
