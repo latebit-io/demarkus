@@ -40,7 +40,8 @@ Server logs cover protocol request handling, startup, and TLS/auth lifecycle. Th
 | `unauthorized` | WARN | `operation`, `path` | Bearer token missing on a write op. Spikes indicate misconfigured clients. |
 | `not permitted` | WARN | `operation`, `path` | Bearer token present but doesn't grant the requested op on the path. |
 | `path traversal attempt blocked` | WARN | `path` | Defensive log; should never spike under legitimate traffic. Alert. |
-| `archive` | INFO | `audit: true`, `operation: ARCHIVE`, `path`, `version`, `token_label`, `success` | Audit event for content deletion. The `audit: true` field is the marker for routing to a separate audit-log stream. |
+| `archive` | INFO | `audit: true`, `operation: ARCHIVE`, `path`, `version`, `token_label`, `success`, `duration_ms` | Audit event for content deletion. The `audit: true` field is the marker for routing to a separate audit-log stream. |
+| `publish`, `append` | INFO | `audit: true`, `operation`, `path`, `version`, `token_label`, `success`, `size_bytes`, `warnings`, `duration_ms` | Audit event for a landed write. A refused one logs `publish conflict`, `publish rejected` or `publish failed` (and the `append` forms) with `success: false`. `duration_ms`, on the line that records a write's outcome, is the milliseconds from taking the request up to the store's answer. Prune lines and refusals made before the store (an invalid document) do not carry it. |
 | `chain verification failed` | WARN | `path`, `error` | Hash-chain integrity check failed for a versioned document. Should not occur in normal operation. |
 | `body too large` | ERROR | `path`, `size_bytes` | Inbound write exceeded the body limit. |
 | `rate limited` | WARN | `ip`, `error`, `suppressed` | A request waited past its budget for the per-IP rate limiter and was refused. Logged once per minute per world: `suppressed` counts the refusals held back since the previous line. |
@@ -56,14 +57,16 @@ Server logs cover protocol request handling, startup, and TLS/auth lifecycle. Th
 - Request rate per verb: `count by verb where msg=request`
 - 4xx-equivalent surface: `count where msg in (unauthorized, not permitted, body too large)`
 - Audit trail: `where audit=true`
+- Write latency: `percentile(duration_ms) by msg where duration_ms exists`
 - Lifecycle: `where msg in (server started, server stopped, auth: tokens reloaded, tls: certificate reloaded)`
 
 ## Knowledge worlds (`demarkus-knowledge`): field schema
 
-The knowledge server shares the server's request-handling and logging code, so protocol events use the `demarkus-server` schema above. Two additions:
+The knowledge server shares the server's request-handling and logging code, so protocol events use the `demarkus-server` schema above. Additions:
 
 - Every world-scoped record carries a `world` field (the world name), and per-connection records add `authority` (the SNI name the client dialed); scope dashboards by `world`.
 - Startup, world-open, TLS, and GCS lifecycle events have their own messages (`configuration invalid`, `TLS setup failed`, `GCS client unavailable`, `world startup failed`); all are ERROR-level and fatal at startup.
+- A world on a bucket logs `slot lost` (INFO: `sequence`, `writes`, `losses`) when another replica created the log slot it was committing. `sequence` is the contested log sequence, `writes` the writes in the lost slot, `losses` how often that batch has lost. Write attempts delayed by replica contention: `sum(writes) by world where msg='slot lost'`. A write whose batch loses more than once counts each time, so against the world's write count this is a rate of delays, not a share of writes.
 
 ## Broker (`demarkus-knowledge`): field schema
 

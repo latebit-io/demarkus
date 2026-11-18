@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
@@ -220,6 +221,19 @@ type writeCall struct {
 	w          io.Writer
 	req        protocol.Request
 	tokenLabel string
+	started    time.Time     // when the server took the request up
+	took       time.Duration // from started to the store's answer
+}
+
+// answered marks the store's answer to the write.
+func (call *writeCall) answered() {
+	call.took = time.Since(call.started)
+}
+
+// outcome logs the line that records what the store answered, with how long
+// the write took; every other line stays on h.logger.
+func (h *Handler) outcome(call *writeCall) *slog.Logger {
+	return h.logger.With("duration_ms", call.took.Milliseconds())
 }
 
 // writeActivity names each write verb in configuration errors.
@@ -231,6 +245,7 @@ var writeActivity = map[string]string{
 
 // serveWrite runs the checks every write shares, then the verb.
 func (h *Handler) serveWrite(ctx context.Context, w io.Writer, req protocol.Request) {
+	started := time.Now()
 	if h.readOnly {
 		h.writeError(w, protocol.StatusNotPermitted, "server is read-only")
 		return
@@ -247,7 +262,7 @@ func (h *Handler) serveWrite(ctx context.Context, w io.Writer, req protocol.Requ
 	if !ok {
 		return
 	}
-	call := &writeCall{w: w, req: req, tokenLabel: tokenLabel}
+	call := &writeCall{w: w, req: req, tokenLabel: tokenLabel, started: started}
 	switch req.Verb {
 	case protocol.VerbPublish:
 		h.handlePublish(ctx, call)

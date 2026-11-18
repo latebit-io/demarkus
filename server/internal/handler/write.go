@@ -17,13 +17,14 @@ func (h *Handler) handleArchive(ctx context.Context, call *writeCall) {
 	w, req, tokenLabel := call.w, call.req, call.tokenLabel
 
 	archive, err := h.store.SetArchived(ctx, storagebackend.ArchiveRequest{Path: req.Path, Archived: true})
+	call.answered()
 	doc := archive.Document
 	if err != nil {
 		h.writeArchiveError(call, "ARCHIVE", err)
 		return
 	}
 
-	h.logger.Info("archive", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
+	h.outcome(call).Info("archive", "audit", true, "operation", "ARCHIVE", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
 	resp := protocol.Response{
 		Status: protocol.StatusOK,
 		Metadata: map[string]string{
@@ -37,17 +38,18 @@ func (h *Handler) handleArchive(ctx context.Context, call *writeCall) {
 // writeArchiveError answers a failed archive transition in either direction.
 func (h *Handler) writeArchiveError(call *writeCall, operation string, err error) {
 	w, reqPath, label := call.w, sanitize(call.req.Path), sanitize(call.tokenLabel)
+	outcome := h.outcome(call)
 	if errors.Is(err, storagebackend.ErrNotFound) {
-		h.logger.Info("archive failed", "audit", true, "operation", operation, "path", reqPath, "token_label", label, "success", false, "reason", "not found")
+		outcome.Info("archive failed", "audit", true, "operation", operation, "path", reqPath, "token_label", label, "success", false, "reason", "not found")
 		h.writeError(w, protocol.StatusNotFound, call.req.Path+" not found")
 		return
 	}
 	if r := classifyRefusal(err); r != nil {
-		h.logger.Info("archive rejected", "audit", true, "operation", operation, "path", reqPath, "token_label", label, "success", false, "reason", r.reason)
+		outcome.Info("archive rejected", "audit", true, "operation", operation, "path", reqPath, "token_label", label, "success", false, "reason", r.reason)
 		h.writeError(w, r.status, r.message)
 		return
 	}
-	h.logger.Error("archive failed", "audit", true, "operation", operation, "path", reqPath, "token_label", label, "success", false, "error", err)
+	outcome.Error("archive failed", "audit", true, "operation", operation, "path", reqPath, "token_label", label, "success", false, "error", err)
 	h.writeError(w, protocol.StatusServerError, "internal error")
 }
 
@@ -56,13 +58,16 @@ func (h *Handler) writeArchiveError(call *writeCall, operation string, err error
 func (h *Handler) handleUnarchive(ctx context.Context, call *writeCall) {
 	w, req, tokenLabel := call.w, call.req, call.tokenLabel
 	archive, err := h.store.SetArchived(ctx, storagebackend.ArchiveRequest{Path: req.Path})
+	call.answered()
 	if err != nil {
 		h.writeArchiveError(call, "UNARCHIVE", err)
 		return
 	}
+	msg := "unarchive unchanged"
 	if archive.Changed {
-		h.logger.Info("unarchive", "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "version", archive.Document.Version, "token_label", sanitize(tokenLabel), "success", true)
+		msg = "unarchive"
 	}
+	h.outcome(call).Info(msg, "audit", true, "operation", "UNARCHIVE", "path", sanitize(req.Path), "version", archive.Document.Version, "token_label", sanitize(tokenLabel), "success", true)
 	h.writeResponse(w, protocol.Response{
 		Status:   protocol.StatusOK,
 		Metadata: map[string]string{"version": strconv.Itoa(archive.Document.Version)},
@@ -110,21 +115,29 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 	}
 
 	doc, warnings, err := h.commit(ctx, call, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta})
-	h.logPrune("PUBLISH", req.Path, tokenLabel, doc)
-	h.logUnknownPrune("PUBLISH", call, err)
 	if err != nil {
 		h.writePublishError(call, expectedVersion, doc, err)
 		return
 	}
 
-	h.logger.Info("publish", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body), "warnings", len(warnings))
+	h.outcome(call).Info("publish", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body), "warnings", len(warnings))
 	h.writeResponse(w, writtenResponse(doc, warnings))
 }
 
-// commit sends a PUBLISH or APPEND to the store. A store behind a write gate
+// commit sends a PUBLISH or APPEND to the store, times its answer and
+// audit-logs its pruning.
+func (h *Handler) commit(ctx context.Context, call *writeCall, write storagebackend.WriteRequest) (*storefmt.Document, []string, error) {
+	doc, warnings, err := h.send(ctx, call, write)
+	call.answered()
+	h.logPrune(call.req.Verb, call.req.Path, call.tokenLabel, doc)
+	h.logUnknownPrune(call.req.Verb, call, err)
+	return doc, warnings, err
+}
+
+// send hands the write to the store. A store behind a write gate
 // (backend.NotingStore) is told what the sender may read and answers with
 // what the gate let through; a bare one has no notes.
-func (h *Handler) commit(ctx context.Context, call *writeCall, write storagebackend.WriteRequest) (*storefmt.Document, []string, error) {
+func (h *Handler) send(ctx context.Context, call *writeCall, write storagebackend.WriteRequest) (*storefmt.Document, []string, error) {
 	appending := call.req.Verb == protocol.VerbAppend
 	noting, gated := h.store.(storagebackend.NotingStore)
 	switch {
@@ -182,9 +195,10 @@ func classifyRefusal(err error) *refusal {
 func (h *Handler) writePublishError(call *writeCall, expectedVersion int, doc *storefmt.Document, err error) {
 	w, req, tokenLabel := call.w, call.req, call.tokenLabel
 	refused := classifyRefusal(err)
+	outcome := h.outcome(call)
 	switch {
 	case errors.Is(err, storefmt.ErrConflict):
-		h.logger.Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
+		outcome.Info("publish conflict", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
 		var body string
 		if expectedVersion == 0 {
 			body = fmt.Sprintf("# Version Conflict\n\nA document already exists at this path (version %d).\n\nFetch the current version and publish with the correct expected-version to update it.\n", doc.Version)
@@ -200,7 +214,7 @@ func (h *Handler) writePublishError(call *writeCall, expectedVersion int, doc *s
 			Body: body,
 		})
 	case errors.Is(err, storefmt.ErrNotModified):
-		h.logger.Info("publish unchanged", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
+		outcome.Info("publish unchanged", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true)
 		h.writeResponse(w, protocol.Response{
 			Status: protocol.StatusOK,
 			Metadata: map[string]string{
@@ -209,22 +223,22 @@ func (h *Handler) writePublishError(call *writeCall, expectedVersion int, doc *s
 			},
 		})
 	case errors.Is(err, storefmt.ErrArchived):
-		h.logger.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
+		outcome.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
 		h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
 	case errors.Is(err, storagebackend.ErrNotFound):
-		h.logger.Info("publish failed", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "not found")
+		outcome.Info("publish failed", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "not found")
 		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 	case errors.Is(err, storefmt.ErrSizeLimit):
-		h.logger.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
+		outcome.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 	case errors.Is(err, storefmt.ErrInvalidMeta):
-		h.logger.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid metadata")
+		outcome.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid metadata")
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 	case refused != nil:
-		h.logger.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", refused.reason)
+		outcome.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", refused.reason)
 		h.writeError(w, refused.status, refused.message)
 	default:
-		h.logger.Error("publish failed", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
+		outcome.Error("publish failed", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 	}
 }
@@ -269,23 +283,22 @@ func (h *Handler) handleAppend(ctx context.Context, call *writeCall) {
 	}
 
 	doc, warnings, err := h.commit(ctx, call, storagebackend.WriteRequest{Path: req.Path, ExpectedVersion: expectedVersion, Content: []byte(req.Body), Metadata: pubMeta})
-	h.logPrune("APPEND", req.Path, tokenLabel, doc)
-	h.logUnknownPrune("APPEND", call, err)
 	if err != nil {
 		h.writeAppendError(call, expectedVersion, doc, err)
 		return
 	}
 
-	h.logger.Info("append", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body), "warnings", len(warnings))
+	h.outcome(call).Info("append", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "version", doc.Version, "token_label", sanitize(tokenLabel), "success", true, "size_bytes", len(req.Body), "warnings", len(warnings))
 	h.writeResponse(w, writtenResponse(doc, warnings))
 }
 
 func (h *Handler) writeAppendError(call *writeCall, expectedVersion int, doc *storefmt.Document, err error) {
 	w, req, tokenLabel := call.w, call.req, call.tokenLabel
 	refused := classifyRefusal(err)
+	outcome := h.outcome(call)
 	switch {
 	case errors.Is(err, storefmt.ErrConflict):
-		h.logger.Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
+		outcome.Info("append conflict", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "expected_version", expectedVersion, "server_version", doc.Version, "token_label", sanitize(tokenLabel), "success", false)
 		body := fmt.Sprintf("# Version Conflict\n\nThe document has been modified since you last fetched it.\n\nYour version: %d\nServer version: %d\n\nFetch the latest version and verify whether your append was applied before retrying.\n", expectedVersion, doc.Version)
 		h.writeResponse(w, protocol.Response{
 			Status: protocol.StatusConflict,
@@ -296,22 +309,22 @@ func (h *Handler) writeAppendError(call *writeCall, expectedVersion int, doc *st
 			Body: body,
 		})
 	case errors.Is(err, storefmt.ErrArchived):
-		h.logger.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
+		outcome.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "archived")
 		h.writeError(w, protocol.StatusArchived, "document is archived; unarchive first")
 	case errors.Is(err, storagebackend.ErrNotFound):
-		h.logger.Info("not found", "path", sanitize(req.Path))
+		outcome.Info("append failed", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "not found")
 		h.writeError(w, protocol.StatusNotFound, req.Path+" not found")
 	case errors.Is(err, storefmt.ErrSizeLimit):
-		h.logger.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
+		outcome.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 	case errors.Is(err, storefmt.ErrInvalidMeta):
-		h.logger.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "merged metadata invalid")
+		outcome.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "merged metadata invalid")
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 	case refused != nil:
-		h.logger.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", refused.reason)
+		outcome.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", refused.reason)
 		h.writeError(w, refused.status, refused.message)
 	default:
-		h.logger.Error("append failed", "path", sanitize(req.Path), "error", err)
+		outcome.Error("append failed", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "error", err)
 		h.writeError(w, protocol.StatusServerError, "internal error")
 	}
 }
