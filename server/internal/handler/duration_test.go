@@ -55,30 +55,49 @@ func TestWriteOutcomeLogsDuration(t *testing.T) {
 		for _, request := range requests {
 			h.HandleStream(context.Background(), newMockStream(request))
 		}
+		heard := logs.Len()
 		h.HandleStream(context.Background(), deafStream{strings.NewReader("PUBLISH /deaf.md" + head + "---\n# Unheard\n")})
 
 		logged := logs.String()
-		with, without := map[string]bool{}, map[string]bool{}
-		for line := range strings.Lines(logged) {
-			var record struct {
-				Msg  string
-				Took *int64 `json:"duration_ms"`
-			}
-			if err := json.Unmarshal([]byte(line), &record); err != nil {
-				t.Fatalf("log line %q: %v", line, err)
-			}
-			if record.Took != nil {
-				with[record.Msg] = true
-			} else {
-				without[record.Msg] = true
-			}
-		}
+		with, without := durationsByMessage(t, logged)
 		for msg, want := range timed {
 			if with[msg] != want || without[msg] == want {
 				t.Errorf("%q lines with duration_ms: %t, without: %t; want every one with it: %t\n%s", msg, with[msg], without[msg], want, logged)
 			}
 		}
+
+		// The deaf request alone: its write committed, then the send failed.
+		unheard := logged[heard:]
+		with, without = durationsByMessage(t, unheard)
+		if !with["publish"] || without["publish"] {
+			t.Errorf("deaf request logged no timed publish:\n%s", unheard)
+		}
+		if !without["write response failed"] || with["write response failed"] {
+			t.Errorf("deaf request logged no untimed write response failed:\n%s", unheard)
+		}
 	})
+}
+
+// durationsByMessage reports which messages in JSON log lines carry
+// duration_ms and which appear without it.
+func durationsByMessage(t *testing.T, logged string) (with, without map[string]bool) {
+	t.Helper()
+	with, without = map[string]bool{}, map[string]bool{}
+	for line := range strings.Lines(logged) {
+		var record struct {
+			Msg  string
+			Took *int64 `json:"duration_ms"`
+		}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		if record.Took != nil {
+			with[record.Msg] = true
+		} else {
+			without[record.Msg] = true
+		}
+	}
+	return with, without
 }
 
 // deafStream fails every write of the response.
