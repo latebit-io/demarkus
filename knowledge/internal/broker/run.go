@@ -46,6 +46,7 @@ type RunOptions struct {
 type LocalServer interface {
 	dispatch.LocalWorlds
 	storage.WorldsApplier
+	gateway.PeerNotes
 	OpenBearerListener(address string, gates func(authority string) (protocol.Gate, error)) error
 	// RequireGate has the server refuse, from now on, an ungated world whose
 	// authority must names, and fails when one is already live.
@@ -201,6 +202,10 @@ func mountGateways(mux *http.ServeMux, w *gatewayWiring) []*gateway.Gateway {
 		watches = w.composite
 	}
 	knowledgeDeps.Watches = watches
+	// A nil LocalServer must stay a nil interface.
+	if w.opts.LocalWorlds != nil {
+		knowledgeDeps.Peers = w.opts.LocalWorlds
+	}
 	knowledgeGateway := gateway.New(knowledgeDeps, w.opts.Version, w.dispatcher, knowledge)
 	knowledgeGateway.Register(mux, "")
 	if !w.cfg.Server.Memory.Enabled() {

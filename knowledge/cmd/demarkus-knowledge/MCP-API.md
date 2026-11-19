@@ -1,10 +1,10 @@
 # Broker MCP API
 
-Operator + developer reference for the 15-tool MCP surface exposed by
+Operator + developer reference for the 18-tool MCP surface exposed by
 the knowledge gateway's `/mcp` endpoint in demarkus-knowledge, the process
-that also serves the worlds. Thirteen tools mirror the local
-`client/cmd/demarkus-mcp` stdio server; `mark_worlds` and
-`mark_lookup_all` are broker-only system operations. A document
+that also serves the worlds. Fifteen tools mirror the local
+`client/cmd/demarkus-mcp` stdio server; `mark_worlds`,
+`mark_lookup_all` and `mark_presence` are broker-only system operations. A document
 fetched via the broker and the same document fetched direct-QUIC
 produce identical body bytes, version, modified timestamp, etag, and
 content-hash. The broker is a wire-shape adapter
@@ -169,6 +169,25 @@ no parameters. The knowledge broker heads the list with `system:
 <host>`, its hostname: the identity a soul's back-stamp records as
 `promoted-via`, the same on every host. A memory tenant's listing has
 none, since it is no promote destination.
+
+#### `mark_presence`
+
+List the people who used the knowledge gateway lately, one row each:
+`user` (the verified email, as write history shows it), `clients` (the
+MCP client names seen for them, such as an agent or `demarkus-library`)
+and `seen` (UTC). Broker-only, no parameters, not served by the memory
+gateway. The caller always has a row. `clients` holds at most a
+person's eight most recently seen.
+
+The `window:` line gives how long a person stays listed after a
+request: `server.idTokenTTL` plus 5 minutes (20 minutes by default), so
+an idle session, which makes one request per bearer, stays listed.
+
+A client names itself, so `clients` is self-reported; only ASCII
+letters, digits, spaces and `._/-` are kept. `unknown` means no replica
+knows the client's name. Replicas tell each other whom they saw over
+the peer port within about a second, best effort: a replica that just
+started lists an idle person only after their next request.
 
 #### `mark_fetch`
 

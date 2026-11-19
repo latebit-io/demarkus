@@ -26,6 +26,7 @@ type peerLinks struct {
 
 	mu     sync.Mutex
 	onHint func(peerhint.Hint)
+	onNote func(payload string)
 }
 
 // openPeers starts the sender and the listener config.Peers names.
@@ -56,7 +57,7 @@ func openPeers(config knowledgeconfig.PeersConfig, certificates *certsource.Sour
 	ctx, cancel := context.WithCancel(context.Background())
 	links.stop = cancel
 	links.group.Go(func() { links.sender.Run(ctx) })
-	endpoint := &peerhint.Endpoint{Logger: logger, OnHint: links.dispatch}
+	endpoint := &peerhint.Endpoint{Logger: logger, OnHint: links.dispatch, OnNote: links.dispatchNote}
 	links.group.Go(func() {
 		err := server.Serve(ctx, func(*quic.Conn) (quicserve.Endpoint, error) { return endpoint, nil })
 		if err != nil && !errors.Is(err, quicserve.ErrServerClosed) {
@@ -104,6 +105,31 @@ func (l *peerLinks) dispatch(hint peerhint.Hint) {
 	l.mu.Unlock()
 	if onHint != nil {
 		onHint(hint)
+	}
+}
+
+// note sends payload to the peers; nothing without peers.
+func (l *peerLinks) note(payload string) error {
+	if l.sender == nil {
+		return nil
+	}
+	return l.sender.Note(payload)
+}
+
+// takeNotes names who takes the peers' notes, nil for no one; a note without
+// a taker is dropped.
+func (l *peerLinks) takeNotes(take func(payload string)) {
+	l.mu.Lock()
+	l.onNote = take
+	l.mu.Unlock()
+}
+
+func (l *peerLinks) dispatchNote(payload string) {
+	l.mu.Lock()
+	take := l.onNote
+	l.mu.Unlock()
+	if take != nil {
+		take(payload)
 	}
 }
 
