@@ -79,14 +79,20 @@ type watchReplica struct {
 
 func (s *watchSystem) replica() *watchReplica {
 	s.t.Helper()
+	return s.replicaWith(nil)
+}
+
+// replicaWith is a replica whose peer links are peers; nil is none.
+func (s *watchSystem) replicaWith(peers PeerNotes) *watchReplica {
+	s.t.Helper()
 	w, _ := brokertest.Registry(s.t, s.cfg).Find(watchWorld)
 	server := knowledgetest.Open(s.t, s.buckets, knowledgetest.World{Name: watchWorld, Authority: w.Authority(), TokensFile: s.tokens})
-	return serveWatches(s.t, s.cfg, server, KnowledgeProfile())
+	return serveWatches(s.t, s.cfg, server, KnowledgeProfile(), peers)
 }
 
 // serveWatches checks the local worlds against server, as run does, and
 // serves profile's gateway with subscriptions on, over HTTP.
-func serveWatches(t *testing.T, cfg *core.Config, server dispatch.LocalWorlds, profile *Profile) *watchReplica {
+func serveWatches(t *testing.T, cfg *core.Config, server dispatch.LocalWorlds, profile *Profile, peers PeerNotes) *watchReplica {
 	t.Helper()
 	if err := dispatch.CheckLocal(brokertest.Registry(t, cfg), server); err != nil {
 		t.Fatal(err)
@@ -95,6 +101,7 @@ func serveWatches(t *testing.T, cfg *core.Config, server dispatch.LocalWorlds, p
 	f := gatewayFixtureFor(t, cfg, core.SharedDeps{Verifier: watchVerifier()}, profile)
 	deps := DepsFor(cfg, profile, f.shared, nil)
 	deps.Watches = composite
+	deps.Peers = peers
 	g := New(deps, "test", composite, profile)
 	g.subs.grace = 200 * time.Millisecond
 	t.Cleanup(func() {
@@ -117,7 +124,7 @@ func memoryReplica(t *testing.T) *watchReplica {
 		cfg.Worlds[i].Local = true
 		worlds = append(worlds, knowledgetest.World{Name: cfg.Worlds[i].Name, Authority: cfg.Worlds[i].Authority(), Gated: true})
 	}
-	return serveWatches(t, cfg, knowledgetest.Open(t, &knowledgetest.Buckets{}, worlds...), MemoryProfile())
+	return serveWatches(t, cfg, knowledgetest.Open(t, &knowledgetest.Buckets{}, worlds...), MemoryProfile(), nil)
 }
 
 // briefBearer lives long enough to subscribe and receive, then lapses.

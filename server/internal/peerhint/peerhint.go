@@ -3,6 +3,9 @@
 // trigger, never the change itself: the peer's store reads what was
 // committed. A lost hint costs latency until the store's own backstop; a
 // forged one costs one read.
+//
+// It also carries notes: small opaque lines the layer above shares between
+// replicas, best effort. A note's taker bounds what a lost or forged one costs.
 package peerhint
 
 import (
@@ -29,9 +32,14 @@ import (
 // so a network policy can keep it inside the replica set.
 const ALPN = "mark-peer"
 
-// One hint per stream, one line: "commit <world id> <sequence>".
+// One message per stream, one line: "commit <world id> <sequence>" or
+// "note <payload>".
 const (
-	maxLineLength = 256
+	maxLineLength = 1024
+	// maxNotes bounds the notes waiting for the sender; past it the oldest go.
+	maxNotes = 256
+	// noteFlush gathers notes into one batch: every batch resolves the peers.
+	noteFlush     = time.Second
 	streamTimeout = 5 * time.Second
 	dialTimeout   = 3 * time.Second
 )
@@ -61,13 +69,29 @@ func parseHint(line string) (Hint, error) {
 	return Hint{WorldID: fields[1], Sequence: sequence}, nil
 }
 
-// Endpoint serves hints from peers; every stream carries one.
+// noteLine is the line carrying payload, refused when a peer could not read
+// it back as one line.
+func noteLine(payload string) (string, error) {
+	if strings.ContainsAny(payload, "\r\n") {
+		return "", errors.New("peerhint: note payload spans lines")
+	}
+	line := "note " + payload + "\n"
+	if len(line) > maxLineLength {
+		return "", fmt.Errorf("peerhint: note of %d bytes exceeds %d", len(line), maxLineLength)
+	}
+	return line, nil
+}
+
+// Endpoint serves hints and notes from peers; every stream carries one.
 type Endpoint struct {
 	OnHint func(Hint)
+	// OnNote takes a note; nil drops them. The payload is cut from the
+	// stream's line: clone what outlives the call.
+	OnNote func(payload string)
 	Logger *slog.Logger
 }
 
-// ServeStream reads one hint and hands it to OnHint.
+// ServeStream reads one line and hands it to OnHint or OnNote.
 func (e *Endpoint) ServeStream(_ context.Context, remote net.Addr, stream quicserve.Stream) {
 	defer func() {
 		if err := stream.Close(); err != nil {
@@ -80,6 +104,12 @@ func (e *Endpoint) ServeStream(_ context.Context, remote net.Addr, stream quicse
 	line, err := bufio.NewReader(io.LimitReader(stream, maxLineLength)).ReadString('\n')
 	if err != nil {
 		e.Logger.Warn("peerhint: reading hint", "remote", remote, "error", err)
+		return
+	}
+	if payload, ok := strings.CutPrefix(strings.TrimSuffix(line, "\n"), "note "); ok {
+		if e.OnNote != nil {
+			e.OnNote(payload)
+		}
 		return
 	}
 	hint, err := parseHint(line)
@@ -99,15 +129,18 @@ type SenderConfig struct {
 	Logger *slog.Logger
 }
 
-// Sender pushes hints to every peer. Hints coalesce per world, so a burst
-// of commits costs each peer one hint carrying the newest sequence.
+// Sender pushes hints and notes to every peer. Hints coalesce per world, so
+// a burst of commits costs each peer one hint carrying the newest sequence.
 type Sender struct {
 	config SenderConfig
 
 	mu      sync.Mutex
 	pending map[string]int64
-	conns   map[string]*quic.Conn
-	wake    chan struct{}
+	notes   []string // lines, oldest first
+	// flushing is set while a noteFlush timer is due to wake the sender.
+	flushing bool
+	conns    map[string]*quic.Conn
+	wake     chan struct{}
 }
 
 // NewSender makes a sender; Run must be started for hints to leave.
@@ -122,6 +155,35 @@ func (s *Sender) Hint(worldID string, sequence int64) {
 		s.pending[worldID] = sequence
 	}
 	s.mu.Unlock()
+	s.wakeUp()
+}
+
+// Note queues payload for every peer, to leave within noteFlush; it never
+// blocks. A full queue drops its oldest note, which a taker must tolerate anyway.
+func (s *Sender) Note(payload string) error {
+	line, err := noteLine(payload)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	dropped := len(s.notes) >= maxNotes
+	if dropped {
+		s.notes = slices.Delete(s.notes, 0, 1)
+	}
+	s.notes = append(s.notes, line)
+	flush := !s.flushing
+	s.flushing = true
+	s.mu.Unlock()
+	if dropped {
+		s.config.Logger.Debug("peerhint: note queue full; oldest dropped")
+	}
+	if flush {
+		time.AfterFunc(noteFlush, s.wakeUp)
+	}
+	return nil
+}
+
+func (s *Sender) wakeUp() {
 	select {
 	case s.wake <- struct{}{}:
 	default:
@@ -143,35 +205,43 @@ func (s *Sender) Run(ctx context.Context) {
 		}
 		peers, err := s.config.Peers(ctx)
 		if err != nil {
-			s.config.Logger.Warn("peerhint: resolving peers; hints dropped", "error", err)
+			s.config.Logger.Warn("peerhint: resolving peers; batch dropped", "error", err)
 			continue
 		}
 		s.forgetGone(peers)
+		// Each peer on its own: an unreachable one must not hold up the rest.
+		var sends sync.WaitGroup
 		for _, peer := range peers {
-			for _, hint := range batch {
-				if !s.send(ctx, peer, hint) {
-					break // one timeout per unreachable peer, not one per hint
+			sends.Go(func() {
+				for _, line := range batch {
+					if !s.send(ctx, peer, line) {
+						break // one timeout per unreachable peer, not one per line
+					}
 				}
-			}
+			})
 		}
+		sends.Wait()
 	}
 }
 
-func (s *Sender) take() []Hint {
+// take empties the queues into the lines to send, hints first.
+func (s *Sender) take() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	batch := make([]Hint, 0, len(s.pending))
+	batch := make([]string, 0, len(s.pending)+len(s.notes))
 	for worldID, sequence := range s.pending {
-		batch = append(batch, Hint{WorldID: worldID, Sequence: sequence})
+		batch = append(batch, Hint{WorldID: worldID, Sequence: sequence}.line())
 	}
 	clear(s.pending)
+	batch = append(batch, s.notes...)
+	s.notes, s.flushing = nil, false
 	return batch
 }
 
-// send opens one stream for the hint and closes it without waiting for an
+// send opens one stream for the line and closes it without waiting for an
 // answer, reporting whether it went. A failure drops the connection so the
-// next hint redials.
-func (s *Sender) send(ctx context.Context, peer string, hint Hint) bool {
+// next line redials.
+func (s *Sender) send(ctx context.Context, peer, line string) bool {
 	conn, err := s.conn(ctx, peer)
 	if err != nil {
 		s.config.Logger.Debug("peerhint: dialing peer", "peer", peer, "error", err)
@@ -181,11 +251,11 @@ func (s *Sender) send(ctx context.Context, peer string, hint Hint) bool {
 	defer cancel()
 	stream, err := conn.OpenStreamSync(openCtx)
 	if err == nil {
-		_, err = stream.Write([]byte(hint.line()))
+		_, err = stream.Write([]byte(line))
 		err = errors.Join(err, stream.Close())
 	}
 	if err != nil {
-		s.config.Logger.Debug("peerhint: sending hint", "peer", peer, "error", err)
+		s.config.Logger.Debug("peerhint: sending line", "peer", peer, "error", err)
 		s.drop(peer, conn)
 		return false
 	}

@@ -31,7 +31,7 @@ type Class struct {
 var classes = map[string]Class{
 	"mark_fetch": {}, "mark_explore": {}, "mark_list": {}, "mark_versions": {},
 	"mark_lookup": {}, "mark_lookup_all": {}, "mark_backlinks": {}, "mark_worlds": {},
-	"mark_doctor": {}, "mark_discover": {Advanced: true}, "mark_graph_export": {Advanced: true},
+	"mark_doctor": {}, "mark_presence": {}, "mark_discover": {Advanced: true}, "mark_graph_export": {Advanced: true},
 	"mark_publish": {Write: true, Store: true}, "mark_append": {Write: true, Store: true}, "mark_archive": {Write: true, Store: true},
 	"mark_curate": {Write: true, Store: true}, "mark_promote": {Write: true, Store: true}, "mark_graph": {Write: true},
 	"mark_graph_publish": {Write: true, Store: true, Advanced: true},

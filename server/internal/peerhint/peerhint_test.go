@@ -20,12 +20,13 @@ import (
 
 var discardLogger = slog.New(slog.DiscardHandler)
 
-// peer is one in-process replica end: a listener that records hints.
+// peer is one in-process replica end: a listener that records hints and notes.
 type peer struct {
-	addr string
-	mu   sync.Mutex
-	got  []Hint
-	cert *tls.Config
+	addr  string
+	mu    sync.Mutex
+	got   []Hint
+	notes []string
+	cert  *tls.Config
 }
 
 func listen(t *testing.T) *peer {
@@ -43,6 +44,10 @@ func listen(t *testing.T) *peer {
 	endpoint := &Endpoint{Logger: discardLogger, OnHint: func(h Hint) {
 		p.mu.Lock()
 		p.got = append(p.got, h)
+		p.mu.Unlock()
+	}, OnNote: func(payload string) {
+		p.mu.Lock()
+		p.notes = append(p.notes, payload)
 		p.mu.Unlock()
 	}}
 	served := make(chan error, 1)
@@ -124,6 +129,54 @@ func TestHintsReachPeersAndCoalesce(t *testing.T) {
 
 func delivered(hints []Hint, want Hint) bool { return slices.Contains(hints, want) }
 
+// A note reaches a peer with its payload as sent, beside the hints.
+func TestNotesReachPeers(t *testing.T) {
+	a := listen(t)
+	sender := runSender(t, a.cert, a.addr)
+	payload := `{"u":"alice@example.com","a":"claude code"}`
+	if err := sender.Note(payload); err != nil {
+		t.Fatal(err)
+	}
+	sender.Hint("world-1", 1)
+	a.waitFor(t, 1)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		a.mu.Lock()
+		got := slices.Clone(a.notes)
+		a.mu.Unlock()
+		if slices.Equal(got, []string{payload}) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("notes = %q, want the one sent", got)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A note a peer could not read back is refused before it is queued, and a
+// queue no one drains keeps only its newest notes.
+func TestNoteQueueIsBounded(t *testing.T) {
+	sender := NewSender(SenderConfig{Logger: discardLogger})
+	for _, bad := range []string{"two\nlines", strings.Repeat("x", maxLineLength)} {
+		if err := sender.Note(bad); err == nil {
+			t.Errorf("a note of %d bytes was queued", len(bad))
+		}
+	}
+	for n := range maxNotes + 10 {
+		if err := sender.Note(strings.Repeat("x", n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	batch := sender.take()
+	if len(batch) != maxNotes || batch[0] != "note "+strings.Repeat("x", 10)+"\n" {
+		t.Fatalf("%d notes queued, first %q; want the newest %d", len(batch), batch[0], maxNotes)
+	}
+	if left := sender.take(); len(left) != 0 {
+		t.Errorf("%d lines left after a take", len(left))
+	}
+}
+
 // A peer with another certificate is not a replica: nothing reaches it,
 // and the sender keeps going for the peers that are.
 func TestSenderRefusesAStrangersCertificate(t *testing.T) {
@@ -141,13 +194,30 @@ func TestSenderRefusesAStrangersCertificate(t *testing.T) {
 // The endpoint takes one well-formed line and drops the rest.
 func TestEndpointParsesOneLine(t *testing.T) {
 	var got []Hint
-	endpoint := &Endpoint{Logger: discardLogger, OnHint: func(h Hint) { got = append(got, h) }}
-	for _, line := range []string{"commit 52b471f7 9\n", "commit 52b471f7 nine\n", "peek 52b471f7 9\n", "commit 52b471f7 0\n", strings.Repeat("x", 300) + "\n", "commit 52b471f7 10"} {
+	var notes []string
+	endpoint := &Endpoint{Logger: discardLogger, OnHint: func(h Hint) { got = append(got, h) },
+		OnNote: func(payload string) { notes = append(notes, payload) }}
+	for _, line := range []string{
+		"commit 52b471f7 9\n", "commit 52b471f7 nine\n", "peek 52b471f7 9\n", "commit 52b471f7 0\n",
+		strings.Repeat("x", 300) + "\n", "commit 52b471f7 " + strings.Repeat("1", maxLineLength) + "\n", "commit 52b471f7 10",
+		"note a b  c\n", "note\n",
+	} {
 		endpoint.ServeStream(context.Background(), nil, &memStream{Reader: strings.NewReader(line)})
 	}
 	if len(got) != 1 || got[0] != (Hint{WorldID: "52b471f7", Sequence: 9}) {
 		t.Fatalf("hints = %v, want the one well-formed line", got)
 	}
+	// The payload is the taker's to judge.
+	if want := []string{"a b  c"}; !slices.Equal(notes, want) {
+		t.Fatalf("notes = %q, want %q", notes, want)
+	}
+}
+
+// Without a taker a note is dropped, as on a replica whose layer above
+// registered none.
+func TestEndpointDropsANoteWithoutATaker(t *testing.T) {
+	endpoint := &Endpoint{Logger: discardLogger, OnHint: func(Hint) { t.Error("a note was taken for a hint") }}
+	endpoint.ServeStream(context.Background(), nil, &memStream{Reader: strings.NewReader("note x\n")})
 }
 
 type memStream struct {

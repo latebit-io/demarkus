@@ -13,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/core"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/dispatch"
 	"github.com/latebit-io/demarkus/knowledge/internal/broker/httpauth"
+	"github.com/latebit-io/demarkus/knowledge/internal/broker/presence"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -49,6 +50,11 @@ type Deps struct {
 	// Watches opens in-process watches for resource subscriptions; nil
 	// leaves subscriptions off. Set from the local server after DepsFor.
 	Watches WorldWatcher
+	// Peers shares presence with the other replicas; nil keeps each
+	// replica's list its own. Set from the local server after DepsFor.
+	Peers PeerNotes
+	// PresenceWindow is how long after a request its caller stays listed.
+	PresenceWindow time.Duration
 }
 
 // TenantProvisioner converges the caller's world on first arrival;
@@ -68,21 +74,22 @@ func DepsFor(cfg *core.Config, profile *Profile, shared core.SharedDeps, provisi
 		}
 	}
 	return &Deps{
-		Hub:          cfg.Federation.Hub,
-		Federated:    federated,
-		Worlds:       shared.Worlds.View(profile.Name),
-		Issuer:       cfg.OIDC.Issuer,
-		PublicURL:    cfg.Server.PublicURL,
-		Gateway:      cfg.Server.Gateway(profile.Name),
-		Realm:        cfg.Server.Realm,
-		SharedDeps:   shared,
-		AllowDomains: cfg.OIDC.AllowDomains,
-		Governors:    cfg.Governors,
-		Provisioner:  provisioner,
+		Hub:            cfg.Federation.Hub,
+		Federated:      federated,
+		Worlds:         shared.Worlds.View(profile.Name),
+		Issuer:         cfg.OIDC.Issuer,
+		PublicURL:      cfg.Server.PublicURL,
+		Gateway:        cfg.Server.Gateway(profile.Name),
+		Realm:          cfg.Server.Realm,
+		SharedDeps:     shared,
+		AllowDomains:   cfg.OIDC.AllowDomains,
+		Governors:      cfg.Governors,
+		Provisioner:    provisioner,
+		PresenceWindow: cfg.Server.IDTokenTTL + presenceMargin,
 	}
 }
 
-// Gateway serves 17 MCP-over-HTTPS tools behind broker SSO. Writes run
+// Gateway serves a profile's MCP-over-HTTPS tools behind broker SSO. Writes run
 // under the identity's grant on the world; no world token is involved.
 type Gateway struct {
 	deps       *Deps
@@ -109,6 +116,9 @@ type Gateway struct {
 	tools *marktools.Tools
 	// subs serves resource subscriptions (mcp_watch.go); nil when off.
 	subs *subscriptions
+	// present is who used this gateway lately (mcp_presence.go); nil on a
+	// tenant-scoped profile, where a caller may learn of no one else.
+	present *presence.Registry
 	// forgetDrops removes dropWorld from the registry at Shutdown.
 	forgetDrops func()
 }
@@ -239,6 +249,13 @@ func New(deps *Deps, version string, dispatcher dispatch.WorldDispatcher, profil
 		fetchSeen:      fetchSeen,
 	}
 	g.forgetDrops = deps.Worlds.OnDrop(g.dropWorld)
+	if !profile.TenantScoped {
+		g.present = presence.New(deps.PresenceWindow, deps.Clock)
+		hooks.AddBeforeAny(g.markPresent)
+		if deps.Peers != nil {
+			deps.Peers.OnPeerNote(g.learnPresent)
+		}
+	}
 	if deps.Watches != nil {
 		g.subs = newSubscriptions(deps, g.admitResourceURI)
 		hooks.AddOnRequestInitialization(g.subs.admit)
@@ -292,6 +309,9 @@ func (g *Gateway) newTransport(idleTTL time.Duration) *mcpserver.StreamableHTTPS
 // listener that mounted the gateway is the caller's.
 func (g *Gateway) Shutdown(ctx context.Context) error {
 	g.forgetDrops()
+	if g.present != nil && g.deps.Peers != nil {
+		g.deps.Peers.OnPeerNote(nil)
+	}
 	return g.transport.Shutdown(ctx)
 }
 
@@ -328,6 +348,7 @@ func (g *Gateway) toolHandlers() map[string]mcpserver.ToolHandlerFunc {
 		"mark_graph":        g.handleMarkGraph,
 		"mark_graph_export": g.handleMarkGraphExport,
 		"mark_worlds":       g.handleMarkWorlds,
+		"mark_presence":     g.handleMarkPresence,
 		"mark_doctor":       g.handleMarkDoctor,
 		"mark_curate":       g.handleMarkCurate,
 		"mark_promote":      g.handleMarkPromote,

@@ -330,6 +330,20 @@ func (s *Server) shutdownListeners() {
 	group.Wait()
 }
 
+// NotePeers sends payload, one line of at most about 1 KB, to the other
+// replicas within a second. Best effort: a note may be lost, and without
+// peers none is sent.
+func (s *Server) NotePeers(payload string) error {
+	return s.peers.note(payload)
+}
+
+// OnPeerNote names who takes the other replicas' notes, nil for no one. The
+// network admits the peer port only from replicas, so a note is as trusted
+// as they are; take clones what it keeps of payload.
+func (s *Server) OnPeerNote(take func(payload string)) {
+	s.peers.takeNotes(take)
+}
+
 // Reload re-reads the TLS certificate and every world's token files; the
 // SIGHUP path. Failures are logged, the previous state stays live.
 func (s *Server) Reload() {

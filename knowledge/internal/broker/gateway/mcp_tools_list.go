@@ -11,9 +11,9 @@ import (
 // host mode; the URL form is stated once in the server instructions.
 const mcpURLDesc = "mark:// URL, e.g. mark://team-a/index.md"
 
-// mcpTools returns the direct-MCP parity tools plus broker-only mark_worlds and
-// mark_lookup_all, which operate on the knowledge system rather than one world.
-// mark_graph_publish is left to demarkus-mcp: federation derives a world's graph.
+// mcpTools is the direct-MCP parity tools plus the broker-only system tools:
+// mark_worlds, mark_lookup_all and mark_presence. mark_graph_publish is left
+// to demarkus-mcp: federation derives a world's graph.
 func mcpTools() []mcp.Tool {
 	return []mcp.Tool{
 		markFetchTool(),
@@ -30,6 +30,7 @@ func mcpTools() []mcp.Tool {
 		markGraphTool(),
 		markGraphExportTool(),
 		markWorldsTool(),
+		markPresenceTool(),
 		markDoctorTool(),
 		markCurateTool(),
 		markPromoteTool(promote.KnowledgePhases),
@@ -98,6 +99,12 @@ func markBacklinksTool() mcp.Tool { return mcpfmt.BacklinksTool(mcpURLDesc, "The
 func markGraphTool() mcp.Tool { return mcpfmt.GraphTool(mcpURLDesc, "") }
 
 func markGraphExportTool() mcp.Tool { return mcpfmt.GraphExportTool("") }
+
+func markPresenceTool() mcp.Tool {
+	return mcpfmt.NewTool("mark_presence",
+		mcp.WithDescription("Who used this system lately; window is in the output. Columns: user, clients (self-reported), seen (UTC)."),
+	)
+}
 
 func markWorldsTool() mcp.Tool {
 	return mcpfmt.NewTool("mark_worlds",
