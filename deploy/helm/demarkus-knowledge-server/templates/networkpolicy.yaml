@@ -31,7 +31,8 @@ spec:
         - protocol: UDP
           port: {{ .Values.server.udpPort }}
     {{- end }}
-    # Commit hints between this chart's own replicas.
+    # Commit hints and presence notes between this chart's own replicas:
+    # the peer listener trusts whoever reaches it.
     - from:
         - podSelector:
             matchLabels:
@@ -83,7 +84,7 @@ spec:
           port: 988
         - protocol: TCP
           port: 987
-    # Commit hints to this chart's own replicas.
+    # Commit hints and presence notes to this chart's own replicas.
     - to:
         - podSelector:
             matchLabels:

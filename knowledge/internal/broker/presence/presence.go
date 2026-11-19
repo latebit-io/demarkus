@@ -16,7 +16,9 @@ const (
 	// A client names itself, so its name and the count per person are bounded.
 	maxAgentLen      = 64
 	maxAgentsPerUser = 8
-	sweepEvery       = time.Minute
+	// maxPeople bounds what peers can add: their word is not verified.
+	maxPeople  = 4096
+	sweepEvery = time.Minute
 	// tellEvery is how often the other replicas hear of someone still here.
 	tellEvery = time.Minute
 )
@@ -84,13 +86,21 @@ func (r *Registry) record(e Entry, now time.Time, own bool) (kept Entry, tell bo
 	r.sweepLocked(now)
 	agents := r.seen[e.User]
 	if agents == nil {
+		if !own && len(r.seen) >= maxPeople {
+			return Entry{}, false
+		}
 		agents = map[string]sighting{}
 		// Cloned: the caller's string may be cut from a request buffer.
 		r.seen[strings.Clone(e.User)] = agents
 	}
 	last, known := agents[e.Agent]
 	if !known && len(agents) >= maxAgentsPerUser {
-		dropOldest(agents)
+		oldest, at := oldestOf(agents)
+		// A late note must not push out a client seen after it.
+		if e.Seen.Before(at) {
+			return Entry{}, false
+		}
+		delete(agents, oldest)
 	}
 	if e.Seen.After(last.seen) {
 		last.seen = e.Seen
@@ -151,16 +161,14 @@ func (r *Registry) sweepLocked(now time.Time) {
 	}
 }
 
-func dropOldest(agents map[string]sighting) {
-	var oldest string
-	var at time.Time
+func oldestOf(agents map[string]sighting) (oldest string, at time.Time) {
 	first := true
 	for agent, last := range agents {
 		if first || last.seen.Before(at) {
 			oldest, at, first = agent, last.seen, false
 		}
 	}
-	delete(agents, oldest)
+	return oldest, at
 }
 
 // note is an Entry between replicas: one line of JSON, the time in seconds.

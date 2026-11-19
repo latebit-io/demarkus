@@ -72,7 +72,7 @@ func clientsOf(p *presence.Person) string {
 }
 
 // handleMarkPresence lists who used the knowledge system within the window,
-// on any replica. The caller is always among them: the call marks it.
+// on any replica. The caller always has a row: the call marks it.
 func (g *Gateway) handleMarkPresence(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) { //nolint:gocritic // signature required by mcp-go's AddTool API
 	people := g.present.People()
 	var b strings.Builder

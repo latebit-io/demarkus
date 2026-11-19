@@ -176,7 +176,8 @@ List the people who used the knowledge gateway lately, one row each:
 `user` (the verified email, as write history shows it), `clients` (the
 MCP client names seen for them, such as an agent or `demarkus-library`)
 and `seen` (UTC). Broker-only, no parameters, not served by the memory
-gateway. The caller is always listed.
+gateway. The caller always has a row. `clients` holds at most a
+person's eight most recently seen.
 
 The `window:` line gives how long a person stays listed after a
 request: `server.idTokenTTL` plus 5 minutes (20 minutes by default), so

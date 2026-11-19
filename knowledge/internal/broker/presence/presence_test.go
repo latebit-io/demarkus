@@ -134,6 +134,36 @@ func TestAClientNameIsBounded(t *testing.T) {
 	}
 }
 
+// A note that arrives late does not push out a client seen after it.
+func TestALateNoteKeepsNewerClients(t *testing.T) {
+	r, c := newTestRegistry(10 * time.Minute)
+	c.Advance(9 * time.Minute)
+	for n := range maxAgentsPerUser {
+		r.Mark("alice@example.com", fmt.Sprintf("agent-%02d", n))
+	}
+	want := r.People()
+	r.Learn(Entry{User: "alice@example.com", Agent: "late", Seen: c.Now().Add(-9 * time.Minute)})
+	if got := r.People(); !reflect.DeepEqual(got, want) {
+		t.Errorf("People after a late note = %+v\nwant %+v", got, want)
+	}
+}
+
+// Peers are not verified, so they cannot grow the list past maxPeople; a
+// person this replica saw itself is always kept.
+func TestPeersCannotGrowTheListWithoutBound(t *testing.T) {
+	r, c := newTestRegistry(10 * time.Minute)
+	for n := range maxPeople + 10 {
+		r.Learn(Entry{User: fmt.Sprintf("forged-%06d@example.com", n), Seen: c.Now()})
+	}
+	if got := len(r.People()); got != maxPeople {
+		t.Errorf("%d people after peers named %d, want %d", got, maxPeople+10, maxPeople)
+	}
+	r.Mark("alice@example.com", "claude-code")
+	if got := r.People()[0].User; got != "alice@example.com" {
+		t.Errorf("first person = %q, want the one seen here", got)
+	}
+}
+
 // People who came once and never returned leave nothing behind.
 func TestRegistryForgetsWhoLeft(t *testing.T) {
 	const warmup, cycles = 2000, 20000
