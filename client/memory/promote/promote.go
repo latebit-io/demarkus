@@ -544,20 +544,20 @@ func (d *Draft) SubjectTags() []string {
 	return out
 }
 
-// invalid is why the server would refuse the metadata, typed as it judges
-// it: the draft's own first, then with the publisher keys apply adds, named.
+// invalid is why the server would refuse the metadata apply sends, typed as
+// it judges it. The keys apply sets are named when the draft alone would pass.
 func (d *Draft) invalid(identity map[string]string) string {
-	if err := storefmt.ValidateMeta(storefmt.ApplyOKFTypeDefault(d.Path, d.Metadata)); err != nil {
-		return err.Error()
-	}
 	sent := d.Sent(identity)
 	err := storefmt.ValidateMeta(storefmt.ApplyOKFTypeDefault(d.Path, sent))
 	if err == nil {
 		return ""
 	}
+	if storefmt.ValidateMeta(storefmt.ApplyOKFTypeDefault(d.Path, d.Metadata)) != nil {
+		return err.Error()
+	}
 	var added []string
 	for _, k := range slices.Sorted(maps.Keys(sent)) {
-		if _, own := d.Metadata[k]; !own && !protocol.IsServerWrittenKey(k) {
+		if own, has := d.Metadata[k]; (!has || own != sent[k]) && !protocol.IsServerWrittenKey(k) {
 			added = append(added, k)
 		}
 	}

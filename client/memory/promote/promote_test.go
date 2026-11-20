@@ -293,8 +293,17 @@ func TestExamineJudgesTheMetadataApplySends(t *testing.T) {
 	sent := d.Sent(identity)
 	// A draft the server refuses on its own says so bare: apply's keys are not why.
 	d.Metadata["notes"] += "n"
-	if c := promote.Examine(d, identity, nil); c.Invalid != fmt.Sprintf("invalid publisher metadata: metadata too large (%d bytes, max %d)", protocol.MaxMetaBytes+1, protocol.MaxMetaBytes) {
+	if c := promote.Examine(d, identity, nil); c.Invalid != fmt.Sprintf("invalid publisher metadata: metadata too large (%d bytes, max %d)", protocol.MaxMetaBytes+1+len("agent"+"claude-code"), protocol.MaxMetaBytes) {
 		t.Errorf("a draft over the cap alone = %q", c.Invalid)
+	}
+	// Apply replaces the caller's promoted-from: what it sends is judged, not the draft.
+	replaced := &promote.Draft{Path: "/x.md", Body: d.Body, Source: "mark://soul/x.md@v3", Metadata: map[string]string{"tags": "x", promote.PromotedFrom: strings.Repeat("p", protocol.MaxMetaBytes)}}
+	if c := promote.Examine(replaced, nil, nil); c.Invalid != "" {
+		t.Errorf("a promoted-from apply replaces = %q", c.Invalid)
+	}
+	replaced.Metadata[promote.PromotedFrom], replaced.Source = "soul", strings.Repeat("s", protocol.MaxMetaBytes)
+	if c := promote.Examine(replaced, nil, nil); !strings.HasSuffix(c.Invalid, ", counting the keys apply adds: promoted-from") {
+		t.Errorf("a promoted-from apply replaces with a longer one = %q", c.Invalid)
 	}
 	if sent["agent"] != "claude-code" || sent["user"] != "alice@example.com" || len(d.Metadata) != 4 {
 		t.Errorf("sent = %v, draft = %v", sent, d.Metadata)

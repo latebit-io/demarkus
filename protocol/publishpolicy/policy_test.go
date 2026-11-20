@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
@@ -177,6 +178,9 @@ func TestPolicyValidateSatisfiable(t *testing.T) {
 	}
 	if err := (Policy{RequiredFields: fields(49)}).Validate(); err == nil {
 		t.Fatal("49 custom fields should exceed the metadata-key limit")
+	}
+	if err := (Policy{RequiredFields: append(fields(48), protocol.MetaUser)}).Validate(); err != nil {
+		t.Fatalf("user is the server's and takes no publisher key: %v", err)
 	}
 
 	long := func(prefix string, count int) []string {

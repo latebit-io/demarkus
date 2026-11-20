@@ -176,7 +176,7 @@ func foldStatus(meta map[string]string, declared string) string {
 // recognized OKF fields. Every drop is reported.
 func enforceCaps(meta map[string]string) (capped map[string]string, warnings []string) {
 	var warns []string
-	for len(meta) > protocol.MaxMetaKeys || storefmt.MetaSize(meta) > protocol.MaxMetaBytes {
+	for storefmt.MetaKeys(meta) > protocol.MaxMetaKeys || storefmt.MetaSize(meta) > protocol.MaxMetaBytes {
 		drop := lowestPriorityKey(meta)
 		if drop == "" {
 			break

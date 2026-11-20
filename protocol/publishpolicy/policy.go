@@ -352,8 +352,8 @@ func validFieldName(field string) bool {
 
 func validateSatisfiable(policy Policy) error {
 	metadata := minimumMetadata(policy)
-	if len(metadata) > protocol.MaxMetaKeys {
-		return fmt.Errorf("publish policy needs at least %d metadata keys; maximum is %d", len(metadata), protocol.MaxMetaKeys)
+	if keys := storefmt.MetaKeys(metadata); keys > protocol.MaxMetaKeys {
+		return fmt.Errorf("publish policy needs at least %d metadata keys; maximum is %d", keys, protocol.MaxMetaKeys)
 	}
 	if size := storefmt.MetaSize(metadata); size > protocol.MaxMetaBytes {
 		return fmt.Errorf("publish policy needs at least %d metadata bytes; maximum is %d", size, protocol.MaxMetaBytes)

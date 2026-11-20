@@ -83,7 +83,7 @@ To attach structured metadata to a document, pass it as request metadata on `PUB
 
 If you don't declare a `type`, the server assigns `type: Document` on PUBLISH and APPEND, so every stored document is a typed OKF concept (the reserved `index.md` and `log.md` are exempt).
 
-Limits: up to 50 keys totaling 1024 bytes (`tags` counted at its serialized list length).
+Limits: up to 50 keys totaling 4096 bytes (`tags` counted at its serialized list length). `user` and `classifier`, which the server writes, are not counted.
 
 ### Response fields (computed, not stored)
 

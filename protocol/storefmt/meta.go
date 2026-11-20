@@ -159,7 +159,6 @@ func ValidateWrite(content []byte, meta map[string]string) error {
 // within the publisher's budget: the one judge of both, for the handler and
 // for a store called off the network path. Failures wrap ErrInvalidMeta.
 func ValidateMeta(meta map[string]string) error {
-	keys := 0
 	for k, v := range meta {
 		if reservedMetaKeys[k] {
 			return fmt.Errorf("%w: key %q is reserved by the store", ErrInvalidMeta, k)
@@ -178,17 +177,26 @@ func ValidateMeta(meta map[string]string) error {
 		if protocol.IsStampKey(k) && len(v) > protocol.MaxStampBytes {
 			return fmt.Errorf("%w: value for key %q too large (%d bytes, max %d)", ErrInvalidMeta, k, len(v), protocol.MaxStampBytes)
 		}
-		if !protocol.IsServerWrittenKey(k) {
-			keys++
-		}
 	}
-	if keys > protocol.MaxMetaKeys {
+	if MetaKeys(meta) > protocol.MaxMetaKeys {
 		return fmt.Errorf("%w: too many metadata keys (max %d)", ErrInvalidMeta, protocol.MaxMetaKeys)
 	}
 	if size := MetaSize(meta); size > protocol.MaxMetaBytes {
 		return fmt.Errorf("%w: metadata too large (%d bytes, max %d)", ErrInvalidMeta, size, protocol.MaxMetaBytes)
 	}
 	return nil
+}
+
+// MetaKeys is what meta spends of MaxMetaKeys: the publisher's keys,
+// server-written ones left out.
+func MetaKeys(meta map[string]string) int {
+	keys := 0
+	for k := range meta {
+		if !protocol.IsServerWrittenKey(k) {
+			keys++
+		}
+	}
+	return keys
 }
 
 // MetaSize is what meta costs against MaxMetaBytes: the publisher's pairs as

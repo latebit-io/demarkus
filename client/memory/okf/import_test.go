@@ -128,6 +128,17 @@ func TestEnforceCaps_KeyCount(t *testing.T) {
 	}
 }
 
+// The key cap is the publisher's: a server-written key costs no publisher key.
+func TestEnforceCaps_ServerWrittenKeyIsNotCounted(t *testing.T) {
+	meta := map[string]string{protocol.MetaUser: "alice@example.com"}
+	for i := range protocol.MaxMetaKeys {
+		meta["k"+strings.Repeat("0", i)] = "v"
+	}
+	if meta, warns := enforceCaps(meta); len(meta) != protocol.MaxMetaKeys+1 || len(warns) != 0 {
+		t.Errorf("kept %d keys, warnings %q; want all %d and none", len(meta), warns, protocol.MaxMetaKeys+1)
+	}
+}
+
 func TestEnforceCaps_ByteSize(t *testing.T) {
 	meta := map[string]string{
 		"type":        "Table",
