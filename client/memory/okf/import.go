@@ -176,7 +176,7 @@ func foldStatus(meta map[string]string, declared string) string {
 // recognized OKF fields. Every drop is reported.
 func enforceCaps(meta map[string]string) (capped map[string]string, warnings []string) {
 	var warns []string
-	for len(meta) > protocol.MaxMetaKeys || metaSize(meta) > protocol.MaxMetaBytes {
+	for len(meta) > protocol.MaxMetaKeys || storefmt.MetaSize(meta) > protocol.MaxMetaBytes {
 		drop := lowestPriorityKey(meta)
 		if drop == "" {
 			break
@@ -186,14 +186,6 @@ func enforceCaps(meta map[string]string) (capped map[string]string, warnings []s
 		delete(meta, drop)
 	}
 	return meta, warns
-}
-
-func metaSize(meta map[string]string) int {
-	n := 0
-	for k, v := range meta {
-		n += storefmt.SerializedMetaSize(k, v)
-	}
-	return n
 }
 
 // metaPriority ranks keys for cap-driven dropping: lower rank is kept longer.

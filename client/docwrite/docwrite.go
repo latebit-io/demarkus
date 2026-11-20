@@ -420,7 +420,7 @@ func Version(meta map[string]string) (int, error) { return optionalInt(meta, "ve
 func Carried(meta map[string]string) map[string]string {
 	out := make(map[string]string, len(meta))
 	for k, v := range meta {
-		if k != "retention" && !protocol.IsReservedMetadataKey(k) && !protocol.IsIdentityMetadataKey(k) && !protocol.IsServerStampedKey(k) {
+		if k != "retention" && !protocol.IsReservedMetadataKey(k) && !protocol.IsStampKey(k) {
 			out[k] = v
 		}
 	}

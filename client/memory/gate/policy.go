@@ -49,7 +49,7 @@ func Lift(kv, meta map[string]string) []string {
 		if k == "name" {
 			k = "title"
 		}
-		if _, taken := meta[k]; v == "" || taken || protocol.IsReservedMetadataKey(k) || protocol.IsIdentityMetadataKey(k) || protocol.IsServerStampedKey(k) {
+		if _, taken := meta[k]; v == "" || taken || protocol.IsReservedMetadataKey(k) || protocol.IsStampKey(k) {
 			continue
 		}
 		meta[k] = v

@@ -2,6 +2,7 @@ package promote_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/layout"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 const (
@@ -206,7 +208,7 @@ func TestApplyRefreshWritesAtThePlannedVersionOnly(t *testing.T) {
 // status or the body's title line.
 func TestApplyRefreshReportsTheRefusalReason(t *testing.T) {
 	backend := &fetchtest.Client{PublishFn: func(_ context.Context, _ fetch.WriteRequest) (fetch.Result, error) {
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusBadRequest, Body: protocol.ErrorBody(protocol.StatusBadRequest, "missing required tag axis category")}}, nil
+		return fetchtest.Refused(protocol.StatusBadRequest, "missing required tag axis category"), nil
 	}}
 	p := &promote.Plan{Status: promote.RefreshStale, Path: "/g.md", Version: 5, Body: "# G\n"}
 	if _, err := promote.ApplyRefresh(t.Context(), doc(backend, "/g.md"), nil, p); err == nil || err.Error() != "publish /g.md: bad-request: missing required tag axis category" {
@@ -217,7 +219,7 @@ func TestApplyRefreshReportsTheRefusalReason(t *testing.T) {
 func TestExamineAgainstThePolicy(t *testing.T) {
 	policy := publishpolicy.Parse("strictness: block\nrequire_tags: domain, category\nrequire_fields: type, user\n")
 	d := &promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles — now.\n", Metadata: map[string]string{"tags": "domain:a,x"}, Version: 2}
-	c := promote.Examine(d, &policy)
+	c := promote.Examine(d, nil, &policy)
 	// The server types an untyped document before judging it, so type is not missing.
 	if got := strings.Join(c.Missing, "|"); got != "missing tag axis category (an category:<value> tag)" {
 		t.Errorf("missing = %q", got)
@@ -248,7 +250,7 @@ func TestExamineAgainstThePolicy(t *testing.T) {
 			t.Errorf("report missing %q:\n%s", want, r)
 		}
 	}
-	clean := promote.Examine(&promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles.\n", Metadata: map[string]string{"tags": "x"}}, nil)
+	clean := promote.Examine(&promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles.\n", Metadata: map[string]string{"tags": "x"}}, nil, nil)
 	if !strings.HasPrefix(clean.Report(), "status: ready\nversion: 0\npolicy: none\n") {
 		t.Errorf("clean:\n%s", clean.Report())
 	}
@@ -259,11 +261,43 @@ func TestExamineAgainstThePolicy(t *testing.T) {
 	if !strings.Contains(clean.Report(), "note: unpinned: ") {
 		t.Errorf("unpinned draft not noted:\n%s", clean.Report())
 	}
-	pinned := promote.Examine(&promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles.\n", Metadata: map[string]string{"tags": "x", "rel-based-on": "https://github.com/o/r/tree/abcdef0"}}, nil)
+	pinned := promote.Examine(&promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles.\n", Metadata: map[string]string{"tags": "x", "rel-based-on": "https://github.com/o/r/tree/abcdef0"}}, nil, nil)
 	requires := publishpolicy.Parse("strictness: block\nrequire_fields: rel-based-on\n")
-	required := promote.Examine(&promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles.\n", Metadata: map[string]string{"tags": "x"}}, &requires)
+	required := promote.Examine(&promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles.\n", Metadata: map[string]string{"tags": "x"}}, nil, &requires)
 	if len(pinned.Notes) != 0 || len(required.Notes) != 0 || !slices.Contains(required.Missing, "missing metadata rel-based-on") {
 		t.Errorf("pinned notes = %q, required notes = %q, missing = %q", pinned.Notes, required.Notes, required.Missing)
+	}
+}
+
+// The dry run judges the metadata apply sends: a draft at the size cap alone
+// that the agent or the provenance key pushes over is a finding. user is the
+// server's to write and outside the cap.
+func TestExamineJudgesTheMetadataApplySends(t *testing.T) {
+	meta := map[string]string{"tags": "x", "type": "Guide", "rel-based-on": "https://github.com/o/r/tree/0123456789abcdef0123456789abcdef01234567/a/file.go"}
+	meta["notes"] = strings.Repeat("n", protocol.MaxMetaBytes-storefmt.MetaSize(meta)-len("notes"))
+	d := &promote.Draft{Path: "/x.md", Body: "# X\n\nWhat x settles.\n", Source: "mark://soul/x.md@v3", Metadata: meta}
+	if c := promote.Examine(d, nil, nil); !strings.HasSuffix(c.Invalid, ", counting the keys apply adds: promoted-from") {
+		t.Errorf("promoted-from alone = %q", c.Invalid)
+	}
+	d.Source = ""
+	user := map[string]string{"user": "alice@example.com"}
+	if c := promote.Examine(d, user, nil); c.Invalid != "" || !strings.HasPrefix(c.Report(), "status: ready\n") {
+		t.Errorf("a draft at the cap, with the server's user = %q", c.Invalid)
+	}
+	identity := map[string]string{"agent": "claude-code", "user": "alice@example.com"}
+	c := promote.Examine(d, identity, nil)
+	want := fmt.Sprintf("- invalid publisher metadata: metadata too large (%d bytes, max %d), counting the keys apply adds: agent\n", protocol.MaxMetaBytes+len("agent"+"claude-code"), protocol.MaxMetaBytes)
+	if r := c.Report(); !strings.HasPrefix(r, "status: findings\n") || !strings.Contains(r, "findings:\n"+want) {
+		t.Errorf("report:\n%s", r)
+	}
+	sent := d.Sent(identity)
+	// A draft the server refuses on its own says so bare: apply's keys are not why.
+	d.Metadata["notes"] += "n"
+	if c := promote.Examine(d, identity, nil); c.Invalid != fmt.Sprintf("invalid publisher metadata: metadata too large (%d bytes, max %d)", protocol.MaxMetaBytes+1, protocol.MaxMetaBytes) {
+		t.Errorf("a draft over the cap alone = %q", c.Invalid)
+	}
+	if sent["agent"] != "claude-code" || sent["user"] != "alice@example.com" || len(d.Metadata) != 4 {
+		t.Errorf("sent = %v, draft = %v", sent, d.Metadata)
 	}
 }
 

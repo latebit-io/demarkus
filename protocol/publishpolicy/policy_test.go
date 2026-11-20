@@ -179,12 +179,18 @@ func TestPolicyValidateSatisfiable(t *testing.T) {
 		t.Fatal("49 custom fields should exceed the metadata-key limit")
 	}
 
-	axes := make([]string, 20)
-	for i := range axes {
-		axes[i] = fmt.Sprintf("axis-%02d-%s", i, strings.Repeat("a", 52))
+	long := func(prefix string, count int) []string {
+		names := make([]string, count)
+		for i := range names {
+			names[i] = fmt.Sprintf("%s%02d-%s", prefix, i, strings.Repeat("a", maxPolicyNameBytes-len(prefix)-3))
+		}
+		return names
 	}
-	if err := (Policy{RequiredTagAxes: axes}).Validate(); err == nil {
-		t.Fatal("oversized minimum tag metadata should be rejected")
+	if err := (Policy{RequiredTagAxes: long("axis-", 30)}).Validate(); err != nil {
+		t.Fatalf("30 long axes should fit: %v", err)
+	}
+	if err := (Policy{RequiredTagAxes: long("axis-", 30), RequiredFields: long("f", 40)}).Validate(); err == nil {
+		t.Fatal("oversized minimum metadata should be rejected")
 	}
 }
 

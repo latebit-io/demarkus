@@ -23,6 +23,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/mdoutline"
 	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // Phases of one promotion, in order. The soul server serves stage, stamp and
@@ -518,6 +519,18 @@ type Draft struct {
 // Title is the draft's name: its H1.
 func (d *Draft) Title() string { return title(d.Body) }
 
+// Sent is the metadata apply publishes: the draft's under the surface's
+// identity keys, with the provenance key.
+func (d *Draft) Sent(identity map[string]string) map[string]string {
+	meta := make(map[string]string, len(d.Metadata)+len(identity)+1)
+	maps.Copy(meta, d.Metadata)
+	maps.Copy(meta, identity)
+	if d.Source != "" {
+		meta[PromotedFrom] = d.Source
+	}
+	return meta
+}
+
 // SubjectTags are the draft's tags without the axis:value ones, longest
 // first: the most specific subjects lead a catalog query.
 func (d *Draft) SubjectTags() []string {
@@ -529,6 +542,26 @@ func (d *Draft) SubjectTags() []string {
 	}
 	slices.SortStableFunc(out, func(a, b string) int { return len(b) - len(a) })
 	return out
+}
+
+// invalid is why the server would refuse the metadata, typed as it judges
+// it: the draft's own first, then with the publisher keys apply adds, named.
+func (d *Draft) invalid(identity map[string]string) string {
+	if err := storefmt.ValidateMeta(storefmt.ApplyOKFTypeDefault(d.Path, d.Metadata)); err != nil {
+		return err.Error()
+	}
+	sent := d.Sent(identity)
+	err := storefmt.ValidateMeta(storefmt.ApplyOKFTypeDefault(d.Path, sent))
+	if err == nil {
+		return ""
+	}
+	var added []string
+	for _, k := range slices.Sorted(maps.Keys(sent)) {
+		if _, own := d.Metadata[k]; !own && !protocol.IsServerWrittenKey(k) {
+			added = append(added, k)
+		}
+	}
+	return err.Error() + ", counting the keys apply adds: " + strings.Join(added, ", ")
 }
 
 // Candidate is a catalog row the draft may duplicate. Fetch marks the ones
@@ -580,6 +613,7 @@ type Check struct {
 	Draft      Draft
 	Policy     *publishpolicy.Policy // nil: the world has none
 	Problems   []string              // style findings on the draft
+	Invalid    string                // why the server would refuse the metadata apply sends
 	Missing    []string              // what the policy requires and the draft lacks
 	Candidates []Candidate
 	Related    []string // lookup rows that are not candidates, for the agent's judgement
@@ -587,10 +621,12 @@ type Check struct {
 	Packet     string
 }
 
-// Examine runs the gate and the policy on the draft. Nothing is fetched.
-func Examine(d *Draft, policy *publishpolicy.Policy) *Check {
+// Examine runs the gate and the policy on the draft, and the store's metadata
+// rules on what apply sends under identity. Nothing is fetched.
+func Examine(d *Draft, identity map[string]string, policy *publishpolicy.Policy) *Check {
 	c := &Check{Draft: *d, Policy: policy, Problems: gate.Problems(d.Path, d.Body, d.Metadata["description"]), Missing: gate.Missing(d.Path, d.Metadata, d.Body, policy)}
 	c.Packet = docwrite.Digest(d.Path, strconv.Itoa(d.Version), d.Body, metaDigest(d.Metadata), d.Source)
+	c.Invalid = d.invalid(identity)
 	// A policy that requires the pin already says so as a finding.
 	if d.Metadata[provenance.Key] == "" && (policy == nil || !slices.Contains(policy.ForCaller().RequiredFields, provenance.Key)) {
 		c.Notes = append(c.Notes, "unpinned: no "+provenance.Key+", so drift from the draft's sources cannot be checked")
@@ -642,7 +678,7 @@ func sharedTags(rowTags string, tags []string) []string {
 func (c *Check) Report() string {
 	var b strings.Builder
 	status := "ready"
-	if len(c.Problems) > 0 || len(c.Missing) > 0 {
+	if len(c.Problems) > 0 || len(c.Missing) > 0 || c.Invalid != "" {
 		status = "findings"
 	}
 	fmt.Fprintf(&b, "status: %s\nversion: %d\n", status, c.Draft.Version)
@@ -664,8 +700,11 @@ func (c *Check) Report() string {
 		}
 		b.WriteString("\n")
 	}
-	if len(c.Missing) > 0 || len(c.Problems) > 0 {
+	if status == "findings" {
 		b.WriteString("findings:\n")
+		if c.Invalid != "" {
+			b.WriteString("- " + c.Invalid + "\n")
+		}
 		for _, m := range c.Missing {
 			b.WriteString("- " + m + "\n")
 		}

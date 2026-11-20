@@ -10,10 +10,10 @@ import (
 )
 
 // extractPublisherMeta returns non-control metadata keys from a request.
-// Returns nil if no publisher keys are present.
+// Returns nil if no publisher keys are present. Count and size are writeMeta's
+// to judge, after the server's own keys are set.
 func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) {
 	var meta map[string]string
-	size := 0
 	for k, v := range reqMeta {
 		if protocol.IsControlMetadataKey(k) {
 			continue
@@ -37,15 +37,23 @@ func extractPublisherMeta(reqMeta map[string]string) (map[string]string, error) 
 			meta = make(map[string]string)
 		}
 		meta[k] = v
-		size += storefmt.SerializedMetaSize(k, v)
-	}
-	if len(meta) > protocol.MaxMetaKeys {
-		return nil, fmt.Errorf("too many metadata keys (max %d)", protocol.MaxMetaKeys)
-	}
-	if size > protocol.MaxMetaBytes {
-		return nil, fmt.Errorf("metadata too large (max %d bytes)", protocol.MaxMetaBytes)
 	}
 	return meta, nil
+}
+
+// writeMeta is the metadata a write stores: the request's publisher keys
+// under the grant's user, judged by the store's rules. A PUBLISH is typed
+// here; an APPEND in the commit, after the base's metadata is merged.
+func writeMeta(ctx context.Context, req *protocol.Request) (map[string]string, error) {
+	meta, err := extractPublisherMeta(req.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	meta = stampUser(ctx, meta)
+	if req.Verb == protocol.VerbPublish {
+		meta = storefmt.ApplyOKFTypeDefault(req.Path, meta)
+	}
+	return meta, storefmt.ValidateMeta(meta)
 }
 
 // stampUser makes the write's user key the grant's: the person its issuer

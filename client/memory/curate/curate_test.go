@@ -524,7 +524,7 @@ func TestApplyPreflightsTopicsAndWritesTheHubLast(t *testing.T) {
 
 	// The server's reason travels with the refusal.
 	backend = &fetchtest.Client{PublishFn: func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
-		return fetch.Result{Response: protocol.Response{Status: protocol.StatusBadRequest, Body: protocol.ErrorBody(protocol.StatusBadRequest, "near-duplicate of /other.md")}}, nil
+		return fetchtest.Refused(protocol.StatusBadRequest, "near-duplicate of /other.md"), nil
 	}}
 	if _, err = Apply(t.Context(), docsOn(backend), &p, stamp); !errors.As(err, &refusal) || refusal.Reason != "bad-request: near-duplicate of /other.md" {
 		t.Fatalf("refused topic: %v", err)

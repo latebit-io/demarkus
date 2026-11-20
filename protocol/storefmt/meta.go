@@ -13,9 +13,9 @@ import (
 )
 
 // MaxStoreFrontmatter bounds the frontmatter a version file carries: the
-// operational fields, the longest path line, MaxMetaBytes of publisher
-// metadata and line overhead.
-const MaxStoreFrontmatter = 2048 + len(storePathKey+": \n") + protocol.MaxRequestPathLength
+// longest path line, MaxMetaBytes of publisher metadata, every server-written
+// key, and 1024 for the operational fields and line overhead.
+const MaxStoreFrontmatter = 1024 + protocol.MaxMetaBytes + len(protocol.ServerWrittenKeys)*protocol.MaxStampBytes + len(storePathKey+": \n") + protocol.MaxRequestPathLength
 
 // storePathKey is the store owned field naming the version's canonical
 // document path. Bare on disk; a publisher "path" key is stored as meta.path.
@@ -155,11 +155,11 @@ func ValidateWrite(content []byte, meta map[string]string) error {
 	return ValidateBody(content)
 }
 
-// ValidateMeta checks metadata is safe for frontmatter serialization. Defense
-// in depth: the handler validates too, but the store is callable off the
-// network path. Failures wrap ErrInvalidMeta so callers can classify them.
+// ValidateMeta checks metadata is safe for frontmatter serialization and
+// within the publisher's budget: the one judge of both, for the handler and
+// for a store called off the network path. Failures wrap ErrInvalidMeta.
 func ValidateMeta(meta map[string]string) error {
-	size := 0
+	keys := 0
 	for k, v := range meta {
 		if reservedMetaKeys[k] {
 			return fmt.Errorf("%w: key %q is reserved by the store", ErrInvalidMeta, k)
@@ -175,15 +175,32 @@ func ValidateMeta(meta map[string]string) error {
 				return fmt.Errorf("%w: key %q must be a positive integer, got %q", ErrInvalidMeta, retentionKey, v)
 			}
 		}
-		size += SerializedMetaSize(k, v)
+		if protocol.IsStampKey(k) && len(v) > protocol.MaxStampBytes {
+			return fmt.Errorf("%w: value for key %q too large (%d bytes, max %d)", ErrInvalidMeta, k, len(v), protocol.MaxStampBytes)
+		}
+		if !protocol.IsServerWrittenKey(k) {
+			keys++
+		}
 	}
-	if len(meta) > protocol.MaxMetaKeys {
+	if keys > protocol.MaxMetaKeys {
 		return fmt.Errorf("%w: too many metadata keys (max %d)", ErrInvalidMeta, protocol.MaxMetaKeys)
 	}
-	if size > protocol.MaxMetaBytes {
-		return fmt.Errorf("%w: metadata too large (max %d bytes)", ErrInvalidMeta, protocol.MaxMetaBytes)
+	if size := MetaSize(meta); size > protocol.MaxMetaBytes {
+		return fmt.Errorf("%w: metadata too large (%d bytes, max %d)", ErrInvalidMeta, size, protocol.MaxMetaBytes)
 	}
 	return nil
+}
+
+// MetaSize is what meta costs against MaxMetaBytes: the publisher's pairs as
+// written, server-written keys left out.
+func MetaSize(meta map[string]string) int {
+	size := 0
+	for k, v := range meta {
+		if !protocol.IsServerWrittenKey(k) {
+			size += SerializedMetaSize(k, v)
+		}
+	}
+	return size
 }
 
 // ExtractMetadata returns bare keyed publisher metadata, or nil: OKF fields

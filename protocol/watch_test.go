@@ -354,7 +354,7 @@ func FuzzParseCursor(f *testing.F) {
 }
 
 // Every field a store can commit fits one block: the request path and
-// metadata limits compose below the block limit, so a server never has to
+// stamp limits compose below the block limit, so a server never has to
 // truncate an event.
 func TestWatchBlockFitsEveryStoredField(t *testing.T) {
 	event := WatchEvent{
@@ -363,7 +363,8 @@ func TestWatchBlockFitsEveryStoredField(t *testing.T) {
 		Version: math.MaxInt,
 		Hash:    "sha256-" + strings.Repeat("f", 64),
 		Op:      OpPublish,
-		Agent:   strings.Repeat("a", MaxMetaBytes),
+		Agent:   strings.Repeat("a", MaxStampBytes),
+		User:    strings.Repeat("u", MaxStampBytes),
 	}
 	var buf bytes.Buffer
 	if _, err := event.Block().WriteTo(&buf); err != nil {

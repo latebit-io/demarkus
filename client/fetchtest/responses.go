@@ -43,6 +43,11 @@ func Created(v int) fetch.Result {
 	return fetch.Result{Response: protocol.Response{Status: protocol.StatusCreated, Metadata: map[string]string{"version": strconv.Itoa(v), "etag": "etag-v" + strconv.Itoa(v)}}}
 }
 
+// Refused is the server's answer to a request it refuses with message.
+func Refused(status, message string) fetch.Result {
+	return fetch.Result{Response: protocol.Response{Status: status, Body: protocol.ErrorBody(status, message)}}
+}
+
 // Head is a live document at version, as a FETCH of it answers.
 func Head(body string, version int, meta map[string]string) fetch.Result {
 	m := map[string]string{"version": strconv.Itoa(version)}

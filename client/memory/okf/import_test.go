@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/protocol"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 func TestBuildImport_RejectsSymlink(t *testing.T) {
@@ -133,8 +134,8 @@ func TestEnforceCaps_ByteSize(t *testing.T) {
 		"description": strings.Repeat("x", protocol.MaxMetaBytes+50),
 	}
 	meta, warns := enforceCaps(meta)
-	if metaSize(meta) > protocol.MaxMetaBytes {
-		t.Fatalf("metaSize = %d, want <= %d", metaSize(meta), protocol.MaxMetaBytes)
+	if storefmt.MetaSize(meta) > protocol.MaxMetaBytes {
+		t.Fatalf("metaSize = %d, want <= %d", storefmt.MetaSize(meta), protocol.MaxMetaBytes)
 	}
 	if meta["type"] != "Table" {
 		t.Errorf("type (higher priority) should survive, got %v", meta)

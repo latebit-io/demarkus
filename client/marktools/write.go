@@ -483,7 +483,7 @@ func (t *Tools) archiveUnder(ctx context.Context, target Target, docs hub.Docs, 
 		case d.Err != nil:
 			fmt.Fprintf(&b, "- %s: failed: %s\n", d.Path, t.writeFailed(SiteArchive, target.Host, d.Err).Text)
 		case !landed(&d.Result):
-			fmt.Fprintf(&b, "- %s: failed: %s\n", d.Path, d.Result.Response.Status)
+			fmt.Fprintf(&b, "- %s: failed: %s\n", d.Path, d.Result.Response.Refusal())
 		default:
 			fmt.Fprintf(&b, "- %s: v%s\n", d.Path, d.Result.Response.Metadata["version"])
 		}
