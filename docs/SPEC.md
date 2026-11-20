@@ -928,7 +928,7 @@ type: BigQuery Table
 <original document content>
 ```
 
-An implementation MAY bound the count and total size of publisher metadata fields (the reference implementation permits up to 50 keys totaling 1024 bytes).
+An implementation MAY bound the count and total size of publisher metadata fields (the reference implementation permits up to 50 keys totaling 4096 bytes; `user` and `classifier` (§8.1), which the server writes, are outside that total, and each identity or server-stamped value is at most 1024 bytes).
 
 The store frontmatter is separate from any frontmatter that may exist in the original document content; the original content is stored verbatim after the closing delimiter. This block is stripped before a document body is served, so the relationship is one of representation, not interoperable transport: a demarkus document's *content model* is OKF-compatible, but a server does not by itself serve or ingest OKF bundles (see §13).
 

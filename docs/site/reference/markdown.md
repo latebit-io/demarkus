@@ -83,7 +83,7 @@ To attach structured metadata to a document, pass it as request metadata on `PUB
 
 If you don't declare a `type`, the server assigns `type: Document` on PUBLISH and APPEND, so every stored document is a typed OKF concept (the reserved `index.md` and `log.md` are exempt).
 
-Limits: up to 50 keys totaling 1024 bytes (`tags` counted at its serialized list length).
+Limits: up to 50 keys totaling 4096 bytes (`tags` counted at its serialized list length). `user` and `classifier`, which the server writes, are not counted.
 
 ### Response fields (computed, not stored)
 
@@ -136,8 +136,8 @@ If you want a link to appear in the graph, use `[text](url)` or a reference link
 ## Document size
 
 - Body: up to 1 MiB (`MaxBodyLength = 1048576` bytes)
-- Publisher metadata: up to 50 keys, 1024 bytes total (`tags` counted at its serialized list length)
-- Stored frontmatter: up to 2 KiB on disk per version (publisher metadata plus the store's own operational fields), plus the store's `path` line, which holds a path up to the request path limit
+- Publisher metadata: up to 50 keys, 4096 bytes total (`tags` counted at its serialized list length). `user` and `classifier`, which the server writes, are not counted; each of `agent`, `user` and `classifier` holds up to 1024 bytes
+- Stored frontmatter: up to 7 KiB on disk per version (publisher metadata, the server-written keys and the store's own operational fields), plus the store's `path` line, which holds a path up to the request path limit
 
 ## Why so minimal?
 

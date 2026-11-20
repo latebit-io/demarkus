@@ -74,14 +74,21 @@ func (h *Handler) handleUnarchive(ctx context.Context, call *writeCall) {
 	})
 }
 
+// rejectRequest answers a PUBLISH or APPEND refused before the store saw it,
+// audit-logged with the message it answers.
+func (h *Handler) rejectRequest(call *writeCall, status, reason, message string) {
+	verb := call.req.Verb
+	h.logger.Info(strings.ToLower(verb)+" rejected", "audit", true, "operation", verb, "path", sanitize(call.req.Path), "token_label", sanitize(call.tokenLabel), "success", false, "reason", reason, "detail", sanitize(message))
+	h.writeError(call.w, status, message)
+}
+
 func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 	w, req, tokenLabel := call.w, call.req, call.tokenLabel
 
 	// Contract before the empty-body shortcut: a non-.md path is rejected
 	// even with an empty body.
 	if err := storefmt.ValidateDocumentText(req.Path, req.Body); err != nil {
-		h.logger.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid document")
-		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		h.rejectRequest(call, protocol.StatusBadRequest, "invalid document", err.Error())
 		return
 	}
 
@@ -90,17 +97,9 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 		return
 	}
 
-	pubMeta, err := extractPublisherMeta(req.Metadata)
+	pubMeta, err := writeMeta(ctx, &req)
 	if err != nil {
-		h.writeError(w, protocol.StatusBadRequest, err.Error())
-		return
-	}
-	pubMeta = stampUser(ctx, pubMeta)
-	// The store contract stores a PUBLISH's metadata as given (storetest
-	// conformance), so the request is typed here; APPEND is typed in the commit.
-	pubMeta = storefmt.ApplyOKFTypeDefault(req.Path, pubMeta)
-	if err := storefmt.ValidateMeta(pubMeta); err != nil {
-		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		h.rejectRequest(call, protocol.StatusBadRequest, "invalid metadata", err.Error())
 		return
 	}
 
@@ -108,7 +107,7 @@ func (h *Handler) handlePublish(ctx context.Context, call *writeCall) {
 	if ev := req.Metadata["expected-version"]; ev != "" {
 		v, err := strconv.Atoi(ev)
 		if err != nil || v < 0 {
-			h.writeError(w, protocol.StatusBadRequest, "invalid expected-version")
+			h.rejectRequest(call, protocol.StatusBadRequest, "invalid expected-version", "invalid expected-version")
 			return
 		}
 		expectedVersion = v
@@ -232,7 +231,7 @@ func (h *Handler) writePublishError(call *writeCall, expectedVersion int, doc *s
 		outcome.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 	case errors.Is(err, storefmt.ErrInvalidMeta):
-		outcome.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid metadata")
+		outcome.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid metadata", "detail", sanitize(err.Error()))
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 	case refused != nil:
 		outcome.Info("publish rejected", "audit", true, "operation", "PUBLISH", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", refused.reason)
@@ -249,36 +248,28 @@ func (h *Handler) handleAppend(ctx context.Context, call *writeCall) {
 	// Contract before the empty-body check: a non-.md path is rejected as
 	// bad-request rather than reported as a missing body.
 	if err := storefmt.ValidateDocumentText(req.Path, req.Body); err != nil {
-		h.logger.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "invalid document")
-		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		h.rejectRequest(call, protocol.StatusBadRequest, "invalid document", err.Error())
 		return
 	}
 	if req.Body == "" {
-		h.writeError(w, protocol.StatusServerError, "append requires a body")
+		h.rejectRequest(call, protocol.StatusServerError, "empty body", "append requires a body")
 		return
 	}
 
-	pubMeta, err := extractPublisherMeta(req.Metadata)
+	pubMeta, err := writeMeta(ctx, &req)
 	if err != nil {
-		h.writeError(w, protocol.StatusBadRequest, err.Error())
-		return
-	}
-	pubMeta = stampUser(ctx, pubMeta)
-	// No OKF type default here: the store applies it after merging the base
-	// version's metadata, so an append never overwrites a declared type.
-	if err := storefmt.ValidateMeta(pubMeta); err != nil {
-		h.writeError(w, protocol.StatusBadRequest, err.Error())
+		h.rejectRequest(call, protocol.StatusBadRequest, "invalid metadata", err.Error())
 		return
 	}
 
 	ev := req.Metadata["expected-version"]
 	if ev == "" {
-		h.writeError(w, protocol.StatusBadRequest, "APPEND requires expected-version metadata")
+		h.rejectRequest(call, protocol.StatusBadRequest, "invalid expected-version", "APPEND requires expected-version metadata")
 		return
 	}
 	expectedVersion, err := strconv.Atoi(ev)
 	if err != nil || expectedVersion < 1 {
-		h.writeError(w, protocol.StatusBadRequest, "invalid expected-version for APPEND (must be >= 1)")
+		h.rejectRequest(call, protocol.StatusBadRequest, "invalid expected-version", "invalid expected-version for APPEND (must be >= 1)")
 		return
 	}
 
@@ -318,7 +309,7 @@ func (h *Handler) writeAppendError(call *writeCall, expectedVersion int, doc *st
 		outcome.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "size limit exceeded")
 		h.writeError(w, protocol.StatusServerError, "content exceeds size limit")
 	case errors.Is(err, storefmt.ErrInvalidMeta):
-		outcome.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "merged metadata invalid")
+		outcome.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", "merged metadata invalid", "detail", sanitize(err.Error()))
 		h.writeError(w, protocol.StatusBadRequest, err.Error())
 	case refused != nil:
 		outcome.Info("append rejected", "audit", true, "operation", "APPEND", "path", sanitize(req.Path), "token_label", sanitize(tokenLabel), "success", false, "reason", refused.reason)

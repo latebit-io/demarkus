@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/docwrite"
@@ -276,14 +275,15 @@ func (t *Tools) promoteDraft(ctx context.Context, target Target, args *PromoteAr
 	if bad != nil {
 		return *bad
 	}
-	check := promote.Examine(draft, policy)
+	identity := t.identityMeta(ctx)
+	check := promote.Examine(draft, identity, policy)
 	if !apply {
 		return t.promoteDryRun(ctx, target, check, head)
 	}
 	if check.Packet != args.Packet {
 		return failure("packet %s does not match the draft against the target at v%d; rerun dry_run and review", args.Packet, draft.Version)
 	}
-	return t.promoteApply(ctx, target, doc, draft)
+	return t.promoteApply(ctx, target, doc, &docwrite.Write{Body: draft.Body, ExpectedVersion: draft.Version, Metadata: draft.Sent(identity)})
 }
 
 // effectivePolicy is the policy the server will judge a write at target by
@@ -358,17 +358,10 @@ func (t *Tools) promoteDryRun(ctx context.Context, target Target, check *promote
 	return text("target: " + target.name() + "\n" + check.Report())
 }
 
-// promoteApply publishes the checked draft as mark_publish would, with the
-// provenance key, at the version the dry run saw; the server's policy
-// decides the write as it does for every publish.
-func (t *Tools) promoteApply(ctx context.Context, target Target, doc *docwrite.Doc, draft *promote.Draft) Result {
-	meta := maps.Clone(draft.Metadata)
-	maps.Copy(meta, t.identityMeta(ctx))
-	if draft.Source != "" {
-		meta[promote.PromotedFrom] = draft.Source
-	}
-	w := docwrite.Write{Body: draft.Body, ExpectedVersion: draft.Version, Metadata: meta}
-	result, notes, bad := t.landPublish(ctx, &publishAt{target: target, doc: doc, mode: merge.OnConflictFail}, &w)
+// promoteApply publishes the write the dry run judged as mark_publish would;
+// the server's policy decides it as it does for every publish.
+func (t *Tools) promoteApply(ctx context.Context, target Target, doc *docwrite.Doc, w *docwrite.Write) Result {
+	result, notes, bad := t.landPublish(ctx, &publishAt{target: target, doc: doc, mode: merge.OnConflictFail}, w)
 	if bad != nil {
 		return *bad
 	}
@@ -376,7 +369,7 @@ func (t *Tools) promoteApply(ctx context.Context, target Target, doc *docwrite.D
 		return failure("apply refused: conflict: the target moved since the dry run; rerun dry_run")
 	}
 	if !landed(&result) {
-		return failure("apply refused: publish %s: %s", target.Path, result.Response.Status)
+		return failure("apply refused: publish %s: %s", target.Path, result.Response.Refusal())
 	}
 	version, err := docwrite.Version(result.Response.Metadata)
 	if err != nil {
@@ -394,7 +387,7 @@ func (t *Tools) promoteApply(ctx context.Context, target Target, doc *docwrite.D
 func callerMeta(raw map[string]string) map[string]string {
 	meta := make(map[string]string, len(raw))
 	for k, v := range raw {
-		if !protocol.IsIdentityMetadataKey(k) && !protocol.IsServerStampedKey(k) {
+		if !protocol.IsStampKey(k) {
 			meta[k] = v
 		}
 	}

@@ -724,7 +724,7 @@ func testBodySizeLimit(t *testing.T, s Direct) {
 // stored: reserved keys, malformed keys and values, bad retention values, and
 // tags whose serialized form overflows although the comma-separated value fits.
 func testInvalidMetadata(t *testing.T, s Direct) {
-	bigTags := strings.Repeat("a,", 399) + "a"
+	bigTags := strings.Repeat("a,", protocol.MaxMetaBytes*2/5) + "a"
 	if len("tags")+len(bigTags) > protocol.MaxMetaBytes || storefmt.SerializedMetaSize("tags", bigTags) <= protocol.MaxMetaBytes {
 		t.Fatalf("test setup: tags must fit as csv and overflow serialized")
 	}

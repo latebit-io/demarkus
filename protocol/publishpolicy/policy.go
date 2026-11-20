@@ -11,6 +11,7 @@ import (
 
 	"github.com/latebit-io/demarkus/protocol"
 	"github.com/latebit-io/demarkus/protocol/directives"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 // SeedAgent is the agent metadata value on a policy a knowledge server seeded
@@ -351,17 +352,10 @@ func validFieldName(field string) bool {
 
 func validateSatisfiable(policy Policy) error {
 	metadata := minimumMetadata(policy)
-	if len(metadata) > protocol.MaxMetaKeys {
-		return fmt.Errorf("publish policy needs at least %d metadata keys; maximum is %d", len(metadata), protocol.MaxMetaKeys)
+	if keys := storefmt.MetaKeys(metadata); keys > protocol.MaxMetaKeys {
+		return fmt.Errorf("publish policy needs at least %d metadata keys; maximum is %d", keys, protocol.MaxMetaKeys)
 	}
-	size := 0
-	for key, value := range metadata {
-		if key == "tags" {
-			value = "[" + strings.ReplaceAll(value, ",", ", ") + "]"
-		}
-		size += len(key) + len(value)
-	}
-	if size > protocol.MaxMetaBytes {
+	if size := storefmt.MetaSize(metadata); size > protocol.MaxMetaBytes {
 		return fmt.Errorf("publish policy needs at least %d metadata bytes; maximum is %d", size, protocol.MaxMetaBytes)
 	}
 	return nil

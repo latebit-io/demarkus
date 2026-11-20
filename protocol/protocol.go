@@ -94,10 +94,26 @@ func IsIdentityMetadataKey(key string) bool {
 	return key == MetaAgent || key == MetaUser
 }
 
+// ServerWrittenKeys are the stored keys whose value is the server's whatever
+// the request carried: user, then the server stamps. Outside the publisher's
+// MaxMetaKeys and MaxMetaBytes; storefmt.MaxStoreFrontmatter counts them.
+var ServerWrittenKeys = [...]string{MetaUser, ClassifierKey}
+
+// IsServerWrittenKey reports one of ServerWrittenKeys.
+func IsServerWrittenKey(key string) bool {
+	return slices.Contains(ServerWrittenKeys[:], key)
+}
+
 // IsServerStampedKey reports stored metadata only the server writes: a
 // write's own value is dropped, so clients never carry or require it.
 func IsServerStampedKey(key string) bool {
-	return key == ClassifierKey
+	return key != MetaUser && IsServerWrittenKey(key)
+}
+
+// IsStampKey reports a key a writer does not word: an identity key or a
+// server stamp. MaxStampBytes bounds its value.
+func IsStampKey(key string) bool {
+	return IsIdentityMetadataKey(key) || IsServerStampedKey(key)
 }
 
 const (
@@ -143,19 +159,18 @@ const (
 	// MatchSimilar answers which documents the request body repeats (§6.7).
 	MatchSimilar = "similar"
 
-	// MaxMetaKeys is the maximum number of publisher metadata keys. Sized to
-	// hold the recognized OKF fields (type, title, description, resource, tags,
-	// timestamp), demarkus's importance, and generous headroom for
-	// producer-defined keys. MaxMetaBytes still bounds the actual on-disk size.
+	// MaxMetaKeys is the maximum number of publisher metadata keys: the OKF
+	// fields, demarkus's importance, and headroom for producer-defined keys.
 	MaxMetaKeys = 50
 
-	// MaxMetaBytes is the approximate maximum size of publisher metadata: the
-	// sum of key lengths and on-disk-serialized value lengths, excluding
-	// per-line delimiters and the "meta." prefix. Values are counted as stored
-	// (notably "tags" as its YAML list form, see store.SerializedMetaSize), so
-	// the cap is an honest bound on frontmatter size. This total, not the key
-	// count, is the binding limit for a typical document.
-	MaxMetaBytes = 1024
+	// MaxMetaBytes caps publisher metadata as storefmt.MetaSize counts it: keys
+	// plus values as stored, server-written keys left out. It binds before
+	// MaxMetaKeys does: a pinned source costs about 150 bytes.
+	MaxMetaBytes = 4096
+
+	// MaxStampBytes bounds each stamp value (IsStampKey), so the identity keys
+	// fit a WATCH block beside the longest path whatever MaxMetaBytes is.
+	MaxStampBytes = 1024
 
 	// OKFDefaultType is the Open Knowledge Format `type` the server assigns to a
 	// published document that declares none, so every stored concept document is

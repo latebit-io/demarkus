@@ -2,6 +2,7 @@ package marktools_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/latebit-io/demarkus/protocol/docframe"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/render"
+	"github.com/latebit-io/demarkus/protocol/storefmt"
 )
 
 const promoteSource = "# Retry Rules\n\nWhen to retry a call.\n\n## Budget\n\nThree tries.\n"
@@ -271,6 +273,30 @@ func TestPromoteApplyBindsToThePacketAndTheStyleGate(t *testing.T) {
 	draft.Phase = "apply"
 	if got := tools.Promote(t.Context(), draft); !got.IsError || !strings.Contains(got.Text, "does not match the draft against the target at v2") {
 		t.Errorf("moved target = %+v", got)
+	}
+}
+
+// Apply adds the agent and provenance keys, so the dry run counts them, and
+// a refusal the dry run could not see carries the server's reason.
+func TestPromoteDryRunSizesWhatApplySendsAndApplyWordsTheRefusal(t *testing.T) {
+	backend := knowledgeBackend()
+	tools := newTools(t, backend, writingHooks())
+	const source = "mark://soul/demarkus/adr/0001-retry.md@v3"
+	meta := map[string]string{"tags": "retry,domain:eng", "type": "Guide", "rel-based-on": "https://github.com/o/r/tree/0123456789abcdef0123456789abcdef01234567/server/internal/handler/write.go"}
+	// At the cap as the caller wrote it: only what apply adds takes it over.
+	meta["notes"] = strings.Repeat("n", protocol.MaxMetaBytes-storefmt.MetaSize(meta)-len("notes"))
+	draft := marktools.PromoteArgs{URL: "/docs/retry-rules.md", Phase: "dry_run", Body: promoteSource, Source: source, Metadata: meta}
+	refusal := fmt.Sprintf("invalid publisher metadata: metadata too large (%d bytes, max %d)", protocol.MaxMetaBytes+len("agent"+"test-agent"+"promoted-from"+source), protocol.MaxMetaBytes)
+	got := tools.Promote(t.Context(), draft)
+	if got.IsError || !strings.Contains(got.Text, "status: findings\nversion: 0\npolicy: strictness block; require_tags domain\nfindings:\n- "+refusal+", counting the keys apply adds: agent, promoted-from\ncandidates:") {
+		t.Fatalf("dry run = %+v", got)
+	}
+	backend.PublishFn = func(context.Context, fetch.WriteRequest) (fetch.Result, error) {
+		return fetchtest.Refused(protocol.StatusBadRequest, refusal), nil
+	}
+	draft.Phase, draft.Packet = "apply", packetOf(t, got)
+	if got := tools.Promote(t.Context(), draft); !got.IsError || got.Text != "apply refused: publish /docs/retry-rules.md: bad-request: "+refusal {
+		t.Errorf("apply = %+v", got)
 	}
 }
 

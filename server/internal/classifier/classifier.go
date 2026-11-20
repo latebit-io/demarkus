@@ -27,7 +27,7 @@ type Limits struct {
 const (
 	// minBytes skips bodies too short to carry an attack worth a call.
 	minBytes = 64
-	// maxReason bounds the stamp under the metadata byte budget.
+	// maxReason keeps the stamp well under protocol.MaxStampBytes.
 	maxReason = 160
 )
 

@@ -240,12 +240,15 @@ func TestSerializeVersionRejectsInvalidPath(t *testing.T) {
 	}
 }
 
-// The longest path beside near-full metadata still fits MaxStoreFrontmatter,
-// which readers size their header reads by.
+// The longest path beside near-full metadata and full server-written keys
+// still fits MaxStoreFrontmatter, which readers size their header reads by.
 func TestMaxStoreFrontmatterHoldsLongestPath(t *testing.T) {
 	meta := make(map[string]string, protocol.MaxMetaKeys)
 	for i := range protocol.MaxMetaKeys {
 		meta[fmt.Sprintf("k%02d", i)] = strings.Repeat("v", protocol.MaxMetaBytes/protocol.MaxMetaKeys-3)
+	}
+	for _, key := range protocol.ServerWrittenKeys {
+		meta[key] = strings.Repeat("s", protocol.MaxStampBytes)
 	}
 	longest := "/" + strings.Repeat("a", protocol.MaxRequestPathLength-1)
 	stored, err := SerializeVersion(&VersionSpec{Path: longest, Version: MaxVersionNumber, Previous: []byte("previous"), Metadata: meta})

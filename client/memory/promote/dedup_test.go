@@ -16,7 +16,7 @@ import (
 const dedupDraft = "# Retry Rules\n\nWhen to retry a call.\n"
 
 func dedupCheck() *promote.Check {
-	return promote.Examine(&promote.Draft{Path: "/docs/retry-rules.md", Body: dedupDraft, Metadata: map[string]string{"tags": "retry"}}, nil)
+	return promote.Examine(&promote.Draft{Path: "/docs/retry-rules.md", Body: dedupDraft, Metadata: map[string]string{"tags": "retry"}}, nil, nil)
 }
 
 // The search owns the dedup's shape: the whole store, a bounded page, the
