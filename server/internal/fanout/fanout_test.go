@@ -489,12 +489,13 @@ func TestSweepEndsRevokedGroups(t *testing.T) {
 	if last := revoked.terminal(t); last.Status != protocol.StatusUnauthorized {
 		t.Fatalf("revoked watcher ended %+v, want unauthorized", last)
 	}
-	if got := logs.String(); !strings.Contains(got, `level=INFO msg="watch ended"`) {
-		t.Fatalf("revoked watch logged:\n%s", got)
-	}
 	publish(hub, "/b/still.md")
 	if got := kept.event(t).Path; got != "/b/still.md" {
 		t.Fatalf("kept watcher saw %s", got)
+	}
+	// Read after kept's event: its open line is written by then.
+	if got := logs.String(); !strings.Contains(got, `level=INFO msg="watch ended"`) {
+		t.Fatalf("revoked watch logged:\n%s", got)
 	}
 }
 
