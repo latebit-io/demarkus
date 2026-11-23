@@ -33,7 +33,10 @@ func readTokens() *auth.TokenStore {
 
 func newFanout(t *testing.T, hub *changefeed.Hub, config Config) *Fanout {
 	t.Helper()
-	config.Hub, config.Logger = hub, discardLogger
+	config.Hub = hub
+	if config.Logger == nil {
+		config.Logger = discardLogger
+	}
 	if config.Heartbeat == 0 {
 		config.Heartbeat = 20 * time.Millisecond
 	}
@@ -466,12 +469,14 @@ func TestIdleStreamsHeartbeat(t *testing.T) {
 	}
 }
 
-// A token reload the sweep sees ends the group's watchers with the verdict.
+// A token reload the sweep sees ends the group's watchers with the verdict,
+// logged at info: nothing scheduled it.
 func TestSweepEndsRevokedGroups(t *testing.T) {
 	hub := changefeed.New("w", 0)
 	var mu sync.Mutex
+	var logs bytes.Buffer
 	current := readTokens()
-	f := newFanout(t, hub, Config{Tokens: func() *auth.TokenStore { mu.Lock(); defer mu.Unlock(); return current }})
+	f := newFanout(t, hub, Config{Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})), Tokens: func() *auth.TokenStore { mu.Lock(); defer mu.Unlock(); return current }})
 	revoked := serve(t, f, Request{Scope: "/a/", Token: "read-a"})
 	kept := serve(t, f, Request{Scope: "/b/", Token: "read-b"})
 	revoked.ack(t)
@@ -484,6 +489,9 @@ func TestSweepEndsRevokedGroups(t *testing.T) {
 	if last := revoked.terminal(t); last.Status != protocol.StatusUnauthorized {
 		t.Fatalf("revoked watcher ended %+v, want unauthorized", last)
 	}
+	if got := logs.String(); !strings.Contains(got, `level=INFO msg="watch ended"`) {
+		t.Fatalf("revoked watch logged:\n%s", got)
+	}
 	publish(hub, "/b/still.md")
 	if got := kept.event(t).Path; got != "/b/still.md" {
 		t.Fatalf("kept watcher saw %s", got)
@@ -491,10 +499,12 @@ func TestSweepEndsRevokedGroups(t *testing.T) {
 }
 
 // A credential that lapses ends its own watch with unauthorized at its
-// cursor; the group's other watchers keep going.
+// cursor, logged at debug as every bearer's ordinary end; the group's other
+// watchers keep going.
 func TestLapsedCredentialEndsItsWatchAlone(t *testing.T) {
 	hub := changefeed.New("w", 0)
-	f := newFanout(t, hub, Config{})
+	var logs bytes.Buffer
+	f := newFanout(t, hub, Config{Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	ctx, cancel := context.WithDeadlineCause(context.Background(), time.Now().Add(150*time.Millisecond), auth.ErrTokenExpired)
 	defer cancel()
 	lapsing := serveIn(ctx, t, f, Request{Scope: "/"})
@@ -507,6 +517,9 @@ func TestLapsedCredentialEndsItsWatchAlone(t *testing.T) {
 	last := lapsing.terminal(t)
 	if c, _ := last.Cursor(); last.Status != protocol.StatusUnauthorized || c != hub.Head() {
 		t.Fatalf("end = %+v, want unauthorized at %v", last, hub.Head())
+	}
+	if got := logs.String(); strings.Contains(got, "level=INFO") || !strings.Contains(got, `level=DEBUG msg="watch ended"`) {
+		t.Fatalf("lapsed watch logged:\n%s", got)
 	}
 	publish(hub, "/y.md")
 	if got := kept.event(t).Path; got != "/y.md" {

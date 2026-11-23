@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"slices"
 
 	"github.com/latebit-io/demarkus/protocol"
@@ -43,6 +44,7 @@ func (e *LimitError) Error() string { return "watch limit reached: " + e.Limit }
 type end struct {
 	status string
 	cursor protocol.Cursor
+	lapsed bool // ctx's own deadline ran out: a bearer's ordinary end, unlike a sweep's denial
 }
 
 // watcher is one attached stream: a read index into the ring, and until it
@@ -78,9 +80,13 @@ func (f *Fanout) Serve(ctx context.Context, req Request, out io.Writer) error {
 	if _, err := protocol.WatchControl(protocol.StatusOK, ack).WriteTo(out); err != nil {
 		return nil //nolint:nilerr // the peer is gone; nothing is left to say
 	}
-	f.logger.Info("watch", "scope", req.Scope, "resumed", !req.Since.IsZero())
+	f.logger.Debug("watch", "scope", req.Scope, "resumed", !req.Since.IsZero())
 	if e := w.pump(ctx, out); e.status != "" {
-		f.logger.Info("watch ended", "scope", req.Scope, "status", e.status)
+		level := slog.LevelInfo
+		if e.lapsed {
+			level = slog.LevelDebug
+		}
+		f.logger.Log(ctx, level, "watch ended", "scope", req.Scope, "status", e.status)
 		if _, err := protocol.WatchControl(e.status, e.cursor).WriteTo(out); err != nil {
 			f.logger.Debug("watch terminal write failed", "error", err)
 		}
@@ -216,7 +222,7 @@ func (w *watcher) pump(ctx context.Context, out io.Writer) end {
 // mid-watch ends it with its verdict; otherwise the peer is gone.
 func (w *watcher) stopped(ctx context.Context) end {
 	if cause := context.Cause(ctx); auth.IsDenial(cause) {
-		return end{status: auth.DenialStatus(cause), cursor: w.cursor()}
+		return end{status: auth.DenialStatus(cause), cursor: w.cursor(), lapsed: errors.Is(cause, auth.ErrTokenExpired)}
 	}
 	return end{}
 }

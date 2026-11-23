@@ -257,7 +257,7 @@ func (s *subscriptions) attach(ctx context.Context, id any, req *subscribeReques
 		sub.watch = w
 		l.subs = append(l.subs, sub)
 	}
-	s.log.InfoContext(ctx, "broker: mcp listen admitted", "subject", core.HashSubject(claims.Subject), "subscriptions", len(subs))
+	s.log.DebugContext(ctx, "broker: mcp listen admitted", "subject", core.HashSubject(claims.Subject), "subscriptions", len(subs))
 	return l, nil
 }
 
