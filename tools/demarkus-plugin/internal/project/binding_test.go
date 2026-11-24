@@ -232,6 +232,38 @@ func TestBindReachesEveryWorktree(t *testing.T) {
 	}
 }
 
+// TestBindRefusesAnIncompleteWorktreeList: a bind that could not read the
+// repository's worktrees must write nothing. A list cut short would leave a
+// worktree on its old row while the command reported success.
+func TestBindRefusesAnIncompleteWorktreeList(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every file")
+	}
+	main, wt := layout(t)
+	bindings(t, [2]string{wt, "team"})
+	records := filepath.Join(main, ".git", "worktrees")
+	for name, path := range map[string]string{"the records directory": records, "one record": filepath.Join(records, filepath.Base(wt), "gitdir")} {
+		if err := os.Chmod(path, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		for _, from := range []string{main, wt} {
+			if got, err := BindTarget(from); err == nil {
+				t.Fatalf("%s unreadable: BindTarget(%s) = %+v, want an error", name, from, got)
+			}
+		}
+		if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // a test directory
+			t.Fatal(err)
+		}
+	}
+	// A record whose worktree is gone is ordinary: pruned, not unreadable.
+	if err := os.Remove(filepath.Join(records, filepath.Base(wt), "gitdir")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := BindTarget(main); err != nil || got.Dir != main {
+		t.Fatalf("pruned record: BindTarget = %+v, %v", got, err)
+	}
+}
+
 // TestOneBindingUnderEverySpelling: a bind from a worktree records git's
 // spelling of the main checkout; a session that reached the main checkout
 // through a symlink must still find it, or the repository splits again.

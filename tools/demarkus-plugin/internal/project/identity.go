@@ -181,29 +181,33 @@ func mainCheckout(common string) (string, error) {
 }
 
 // worktrees are the tops of the linked worktrees of co's repository. Each is
-// confirmed by its own pointer: a record alone could name any directory.
-func worktrees(co checkout) []string {
+// confirmed by its own pointer: a record alone could name any directory. An
+// unreadable record is an error: a list cut short would pass for complete.
+func worktrees(co checkout) ([]string, error) {
 	records := filepath.Join(co.common, "worktrees")
 	entries, err := os.ReadDir(records)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			fmt.Fprintln(os.Stderr, "[demarkus-plugin] project: worktree records: "+err.Error())
-		}
-		return nil
+		return nil, fmt.Errorf("list the repository's worktrees: %w", err)
 	}
 	var tops []string
 	for _, e := range entries {
 		record := filepath.Join(records, e.Name())
 		back, err := os.ReadFile(filepath.Join(record, "gitdir")) //nolint:gosec // the repository's own record
-		if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			continue // a record being pruned names no worktree
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read the repository's worktree record: %w", err)
 		}
 		top := filepath.Dir(absFrom(record, strings.TrimSpace(string(back))))
 		if wt, err := findCheckout(top); err == nil && wt.top == top && wt.linked && sameDir(wt.common, co.common) {
 			tops = append(tops, top)
 		}
 	}
-	return tops
+	return tops, nil
 }
 
 func absFrom(base, p string) string {

@@ -6,7 +6,13 @@ func TestParseGitConfig(t *testing.T) {
 	if v := parseGitConfig("[core]\n\tbare = true\n\tworktree = ../app\n"); !v.bare || v.worktree != "../app" {
 		t.Fatalf("core.bare and core.worktree: %+v", v)
 	}
-	for text, want := range map[string]bool{"[core]\n\tbare\n": true, "[core]\n\tbare = Yes\n": true, "[core]\n\tbare = false\n": false, "[core]\n\tbare =\n": false, "[core \"x\"]\n\tbare = true\n": false} {
+	for text, want := range map[string]bool{
+		"[core]\n\tbare\n": true, "[core]\n\tbare = Yes\n": true, "[core]\n\tbare = on\n": true,
+		"[core]\n\tbare = 1\n": true, "[core]\n\tbare = 2\n": true, "[core]\n\tbare = -1\n": true, "[core]\n\tbare = 1k\n": true, "[core]\n\tbare = 0x10\n": true,
+		"[core]\n\tbare = false\n": false, "[core]\n\tbare = no\n": false, "[core]\n\tbare = 0\n": false, "[core]\n\tbare = 00\n": false, "[core]\n\tbare = 0k\n": false,
+		"[core]\n\tbare =\n": false, "[core]\n\tbare = maybe\n": false, "[core]\n\tbare = k\n": false, "[core]\n\tbare = 1kk\n": false, "[core]\n\tbare = 010\n": true, "[core]\n\tbare = 1K\n": true,
+		"[core \"x\"]\n\tbare = true\n": false,
+	} {
 		if v := parseGitConfig(text); v.bare != want {
 			t.Errorf("parseGitConfig(%q).bare = %v, want %v", text, v.bare, want)
 		}

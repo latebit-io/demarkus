@@ -259,7 +259,10 @@ func BindTarget(dir string) (catalog.BindTarget, error) {
 		}
 	}
 	replace(target.Dir)
-	tops := worktrees(co)
+	tops, err := worktrees(co)
+	if err != nil {
+		return catalog.BindTarget{}, err
+	}
 	if co.linked && !slices.Contains(tops, co.top) {
 		tops = append(tops, co.top) // its record may be stale after a move
 	}

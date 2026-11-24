@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -70,13 +71,18 @@ func parseGitConfig(text string) gitValues {
 	return v
 }
 
-// isTrue reads a boolean the way git does.
+// isTrue reads a boolean the way git does: true, yes and on, or any integer
+// but zero, which may carry git's k, m or g unit.
 func isTrue(value string) bool {
 	switch strings.ToLower(value) {
-	case "true", "yes", "on", "1":
+	case "true", "yes", "on":
 		return true
 	}
-	return false
+	if last := len(value) - 1; last > 0 && strings.ContainsRune("kKmMgG", rune(value[last])) {
+		value = value[:last]
+	}
+	n, err := strconv.ParseInt(value, 0, 64)
+	return err == nil && n != 0
 }
 
 func trimLead(s string) string {
