@@ -177,6 +177,28 @@ func TestIdentifyLayouts(t *testing.T) {
 	}
 }
 
+// TestWorktreeOfAGitDirKeptApart: a linked worktree whose repository's git
+// dir sits away from its checkout. Anchoring at the git dir would name the
+// repository twice: once there, once at the checkout.
+func TestWorktreeOfAGitDirKeptApart(t *testing.T) {
+	root := t.TempDir()
+	apart := filepath.Join(root, "data", "store.git")
+	wt := filepath.Join(root, "wt")
+
+	// Git records no way back to the checkout: no name is better than two.
+	projecttest.Bare(t, apart, "[core]\n\tbare = false\n")
+	projecttest.Worktree(t, apart, wt)
+	if _, err := nameOf(wt); !errors.As(err, new(*IdentityError)) {
+		t.Fatalf("worktree of a git dir kept apart: err = %v, want an IdentityError", err)
+	}
+
+	// core.worktree is that way back, relative to the git dir as git reads it.
+	projecttest.Bare(t, apart, "[core]\n\tbare = false\n\tworktree = ../../src/app\n")
+	if id := mustName(t, wt); id.Anchor != filepath.Join(root, "src", "app") || id.Slug != "app" || id.Source != SourceMain {
+		t.Fatalf("worktree with core.worktree: %+v", id)
+	}
+}
+
 // TestIdentifyRefusesWhatItCannotRead: a checkout that cannot be named takes
 // no name. Its directory name is what made every worktree its own project.
 func TestIdentifyRefusesWhatItCannotRead(t *testing.T) {
@@ -333,6 +355,37 @@ func TestBareLayoutsAgreeWithGit(t *testing.T) {
 		if err != nil || realPath(t, co.common) != realPath(t, common) {
 			t.Fatalf("%s: common dir %s (%v), git says %s", c.wt, co.common, err, common)
 		}
+	}
+}
+
+// TestSeparateGitDirAgreesWithGit: git itself reports the git dir as this
+// layout's main worktree, so its linked worktree cannot be tied to the checkout.
+func TestSeparateGitDirAgreesWithGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	t.Setenv("GIT_CEILING_DIRECTORIES", root)
+	work, wt := filepath.Join(root, "src", "app"), filepath.Join(root, "wt")
+	for _, dir := range []string{work, filepath.Join(root, "data")} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(t, work, "init", "-q", "-b", "main", "--separate-git-dir", filepath.Join(root, "data", "store.git"))
+	git(t, work, "commit", "-q", "--allow-empty", "-m", "first")
+	git(t, work, "worktree", "add", "-q", wt, "-b", "feat")
+
+	if id := mustName(t, work); id.Slug != "app" || id.Anchor != work {
+		t.Fatalf("checkout of a git dir kept apart: %+v", id)
+	}
+	if _, err := nameOf(wt); !errors.As(err, new(*IdentityError)) {
+		t.Fatalf("its linked worktree: err = %v, want an IdentityError", err)
+	}
+	if listed := git(t, wt, "worktree", "list", "--porcelain"); !strings.Contains(listed, "store.git") || strings.Contains(listed, "worktree "+realPath(t, work)+"\n") {
+		t.Fatalf("git now finds the checkout; mainCheckout can too:\n%s", listed)
 	}
 }
 

@@ -7,18 +7,20 @@ import (
 	"strings"
 )
 
-// gitValues are the two local config values identity reads.
+// gitValues are the local config values identity reads.
 type gitValues struct {
 	override    string // demarkus.project, last value
 	hasOverride bool
 	origin      string // remote.origin.url, first value
+	bare        bool   // core.bare
+	worktree    string // core.worktree: the checkout of a git dir kept elsewhere
 }
 
 // readGitConfig reads a repository's own config file; an absent file has no
 // values. Includes are not followed, and no other scope is ever read: a
 // global demarkus.project would fold every project into one root.
 func readGitConfig(path string) (gitValues, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // a repository's config, parsed for fixed keys and never echoed
 	if errors.Is(err, fs.ErrNotExist) {
 		return gitValues{}, nil
 	}
@@ -28,7 +30,7 @@ func readGitConfig(path string) (gitValues, error) {
 	return parseGitConfig(string(b)), nil
 }
 
-// parseGitConfig follows git's config grammar far enough for two keys:
+// parseGitConfig follows git's config grammar far enough for a few keys:
 // case-insensitive sections and keys, case-sensitive subsections, quoted
 // values, backslash escapes and continuations, # and ; comments.
 func parseGitConfig(text string) gitValues {
@@ -49,8 +51,9 @@ func parseGitConfig(text string) gitValues {
 			}
 		}
 		key, rest := cutKey(ln)
-		value := ""
+		value, valued := "", false
 		if rest = trimLead(rest); strings.HasPrefix(rest, "=") {
+			valued = true
 			value, text = parseValue(rest[1:], text)
 		}
 		switch {
@@ -58,9 +61,22 @@ func parseGitConfig(text string) gitValues {
 			v.override, v.hasOverride = value, true
 		case section == "remote" && sub == "origin" && key == "url" && v.origin == "":
 			v.origin = value
+		case section == "core" && sub == "" && key == "bare":
+			v.bare = !valued || isTrue(value) // a bare key is true
+		case section == "core" && sub == "" && key == "worktree":
+			v.worktree = value
 		}
 	}
 	return v
+}
+
+// isTrue reads a boolean the way git does.
+func isTrue(value string) bool {
+	switch strings.ToLower(value) {
+	case "true", "yes", "on", "1":
+		return true
+	}
+	return false
 }
 
 func trimLead(s string) string {

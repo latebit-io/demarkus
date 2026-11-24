@@ -144,18 +144,20 @@ type BindTarget struct {
 	Replaces []string
 }
 
-// BindProject records that target writes to catalog memory SLUG by default.
-// Locked + atomic; validates SLUG is a joined memory first.
-func BindProject(target BindTarget, slug string) error {
+// BindProject records that the resolved target writes to catalog memory SLUG
+// by default. Locked + atomic; validates SLUG is a joined memory first.
+// resolve runs under the bindings lock, so what it replaces is what is there.
+func BindProject(resolve func() (BindTarget, error), slug string) (BindTarget, error) {
 	memoriesPath, err := config.StatePath("souls")
 	if err != nil {
-		return err
+		return BindTarget{}, err
 	}
 	bindingsPath, err := config.StatePath("project-souls")
 	if err != nil {
-		return err
+		return BindTarget{}, err
 	}
-	return statefile.WithLock(memoriesPath, func() error {
+	var target BindTarget
+	err = statefile.WithLock(memoriesPath, func() error {
 		return statefile.WithLock(bindingsPath, func() error {
 			ok, err := IsMemory(slug)
 			if err != nil {
@@ -164,6 +166,9 @@ func BindProject(target BindTarget, slug string) error {
 			if !ok {
 				return fmt.Errorf("'%s' is not a joined memory; run /soul-join first (see /soul-default --list)", slug)
 			}
+			if target, err = resolve(); err != nil {
+				return err
+			}
 			mutation, err := BindingMutation(target, slug, bindingsPath)
 			if err != nil {
 				return err
@@ -171,6 +176,7 @@ func BindProject(target BindTarget, slug string) error {
 			return statefile.Apply([]statefile.Mutation{mutation})
 		})
 	})
+	return target, err
 }
 
 var genericLabels = map[string]bool{"mcp": true, "broker": true, "api": true, "gateway": true, "gw": true, "www": true}

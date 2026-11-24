@@ -203,15 +203,12 @@ func Init(mode string, port int, root string) (string, error) {
 // linked worktree binds its main checkout, so the repository has one store.
 // The answer stays `OK <slug>` for prompts of any release; the note is stderr's.
 func Default(dir, slug string) (string, error) {
-	target, err := project.BindTarget(dir)
+	target, err := catalog.BindProject(func() (catalog.BindTarget, error) { return project.BindTarget(dir) }, slug)
 	if err != nil {
 		return "", err
 	}
-	if err := catalog.BindProject(target, slug); err != nil {
-		return "", err
-	}
 	if len(target.Replaces) > 0 {
-		fmt.Fprintln(os.Stderr, "[demarkus-plugin] memory-default: bound the main checkout "+target.Dir+"; its worktrees follow it")
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] memory-default: bound "+target.Dir+", replacing the rows for "+strings.Join(target.Replaces, ", "))
 	}
 	return "OK " + slug, nil
 }

@@ -196,19 +196,16 @@ func (m *matcher) match(p string) (string, bool) {
 	if store, ok := m.rows.Lookup(p); ok {
 		return store, true
 	}
-	if same := m.aliases(p); len(same) > 0 {
+	if same := m.named(p); len(same) > 0 {
 		return same[len(same)-1].Store, true
 	}
 	return "", false
 }
 
-// aliases are the rows naming p's directory, under any spelling, in file order.
-func (m *matcher) aliases(p string) []config.Binding {
-	at, err := os.Stat(p)
-	if err != nil {
-		return nil // not on disk: only its spelling could have matched
-	}
-	if m.info == nil {
+// named are the rows for p's directory, under any spelling, in file order.
+func (m *matcher) named(p string) []config.Binding {
+	at, err := os.Stat(p) //nolint:gosec // compared with the rows by identity; off disk, only its spelling can match
+	if err == nil && m.info == nil {
 		m.info = make([]fs.FileInfo, len(m.rows))
 		for i, row := range m.rows {
 			m.info[i] = statRow(row.Dir)
@@ -216,7 +213,7 @@ func (m *matcher) aliases(p string) []config.Binding {
 	}
 	var same []config.Binding
 	for i, row := range m.rows {
-		if m.info[i] != nil && os.SameFile(m.info[i], at) {
+		if row.Dir == p || err == nil && m.info[i] != nil && os.SameFile(m.info[i], at) {
 			same = append(same, row)
 		}
 	}
@@ -237,26 +234,38 @@ func statRow(dir string) fs.FileInfo {
 }
 
 // BindTarget is the bindings row a default set from dir writes: the same path
-// in the main checkout for a linked worktree, so the repository has one
-// binding. It replaces the worktree's own rows, which would outrank it.
+// in the main checkout, so a repository has one binding. It replaces the rows
+// that would outrank it in any worktree, and other spellings of its own.
 func BindTarget(dir string) (catalog.BindTarget, error) {
 	dir, co, err := locate(dir)
 	if err != nil {
 		return catalog.BindTarget{}, err
 	}
-	if !co.linked {
+	if co.top == "" {
 		return catalog.BindTarget{Dir: dir}, nil
 	}
 	rows, err := config.ProjectBindings()
 	if err != nil {
 		return catalog.BindTarget{}, err
 	}
-	target := catalog.BindTarget{Dir: mirror(co, dir), Replaces: slices.Collect(upTo(dir, co.top))}
-	// One row per directory: another spelling of the target goes too.
+	rel := strings.TrimPrefix(dir, co.top)
+	target := catalog.BindTarget{Dir: filepath.Join(co.anchor, rel)}
 	m := matcher{rows: rows}
-	for _, row := range m.aliases(target.Dir) {
-		if row.Dir != target.Dir {
-			target.Replaces = append(target.Replaces, row.Dir)
+	replace := func(p string) {
+		for _, row := range m.named(p) {
+			if row.Dir != target.Dir && !slices.Contains(target.Replaces, row.Dir) {
+				target.Replaces = append(target.Replaces, row.Dir)
+			}
+		}
+	}
+	replace(target.Dir)
+	tops := worktrees(co)
+	if co.linked && !slices.Contains(tops, co.top) {
+		tops = append(tops, co.top) // its record may be stale after a move
+	}
+	for _, top := range tops {
+		for p := range upTo(filepath.Join(top, rel), top) {
+			replace(p)
 		}
 	}
 	return target, nil

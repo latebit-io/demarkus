@@ -3,6 +3,14 @@ package project
 import "testing"
 
 func TestParseGitConfig(t *testing.T) {
+	if v := parseGitConfig("[core]\n\tbare = true\n\tworktree = ../app\n"); !v.bare || v.worktree != "../app" {
+		t.Fatalf("core.bare and core.worktree: %+v", v)
+	}
+	for text, want := range map[string]bool{"[core]\n\tbare\n": true, "[core]\n\tbare = Yes\n": true, "[core]\n\tbare = false\n": false, "[core]\n\tbare =\n": false, "[core \"x\"]\n\tbare = true\n": false} {
+		if v := parseGitConfig(text); v.bare != want {
+			t.Errorf("parseGitConfig(%q).bare = %v, want %v", text, v.bare, want)
+		}
+	}
 	cases := []struct {
 		name, text       string
 		origin, override string

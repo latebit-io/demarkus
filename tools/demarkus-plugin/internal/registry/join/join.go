@@ -98,7 +98,7 @@ type joinPlan struct {
 	row              config.MemoryRow
 	token            string // raw token to store; "" for a tokenless join
 	managedTokenFile string
-	bind             catalog.BindTarget
+	bindDir          string // "" when no binding is requested
 	memoriesPath     string
 	bindingsPath     string // "" when no binding is requested
 }
@@ -106,15 +106,12 @@ type joinPlan struct {
 // planJoin resolves the state files a join touches; shared by the QUIC and
 // broker paths. The reserved local slug is rejected at commit, under the lock.
 func planJoin(row config.MemoryRow, token, bindDir string) (*joinPlan, error) {
-	plan := &joinPlan{row: row, token: token}
+	plan := &joinPlan{row: row, token: token, bindDir: bindDir}
 	var err error
 	if plan.memoriesPath, err = config.StatePath("souls"); err != nil {
 		return nil, err
 	}
 	if bindDir != "" {
-		if plan.bind, err = project.BindTarget(bindDir); err != nil {
-			return nil, err
-		}
 		if plan.bindingsPath, err = config.StatePath("project-souls"); err != nil {
 			return nil, err
 		}
@@ -209,8 +206,13 @@ func (p *joinPlan) mutations() ([]statefile.Mutation, string, error) {
 	if tokenDelete != nil {
 		mutations = append(mutations, *tokenDelete)
 	}
-	if p.bindingsPath != "" {
-		binding, err := catalog.BindingMutation(p.bind, p.row.Slug, p.bindingsPath)
+	if p.bindDir != "" {
+		// Resolved here, under the bindings lock: the rows it replaces are the rows there.
+		target, err := project.BindTarget(p.bindDir)
+		if err != nil {
+			return nil, "", err
+		}
+		binding, err := catalog.BindingMutation(target, p.row.Slug, p.bindingsPath)
 		if err != nil {
 			return nil, "", err
 		}

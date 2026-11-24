@@ -48,7 +48,7 @@ Each project keeps a hub at `/<project>/index.md`; new documents link from it on
 
 ### Which project
 
-A git checkout is its repository's project, whatever its directory is called, so every worktree and clone shares one root and one soul. First match names it:
+A git checkout is its repository's project, whatever its directory is called, so every worktree and clone resolves to one project root. Which soul holds that root is the checkout's binding, below. First match names the project:
 
 | Source | Example |
 |---|---|
@@ -59,7 +59,9 @@ A git checkout is its repository's project, whatever its directory is called, so
 
 - A directory below the checkout's top level keeps its own name: `mono/packages/web` is `web`.
 - Two unrelated repositories with one name share a root. Set `demarkus.project` in one of them; worktrees read it from the shared config.
-- A worktree writes to its main checkout's soul. `/soul-default` run from a worktree binds the main checkout.
+- Bindings are per directory. A worktree with no binding of its own writes to its main checkout's soul; a separate clone has its own binding, so two clones can keep the same root in different souls.
+- `/soul-default` binds the main checkout from anywhere in the repository and replaces the bindings its worktrees held, so they all follow it.
+- A worktree of a repository whose git directory is kept apart from its checkout (`git init --separate-git-dir`) cannot be tied to that checkout: the session names no project and asks.
 - A checkout that once had a root under its directory name gets an `Earlier root:` line at session start, naming where the older notes are.
 - Repointing `origin` at a repository with another name moves the project to that name.
 

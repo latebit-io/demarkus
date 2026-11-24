@@ -642,4 +642,24 @@ func TestDestinationGateOnAnUnidentifiedCheckout(t *testing.T) {
 	if !strings.Contains(d.Reason, "destination was not checked") || !strings.Contains(d.Reason, "has no metadata.tags") {
 		t.Fatalf("multi-root with an unidentified root: got %q (%s)", d.Decision, d.Reason)
 	}
+
+	// Roots that already disagree stay ambiguous: an unreadable one beside
+	// them must not turn a blocked write into a warned one.
+	a, b := filepath.Join(home, "a"), filepath.Join(home, "b")
+	for _, dir := range []string{a, b} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "project-souls"), []byte(a+"\tone\n"+b+"\ttwo\n"+home+"\tother\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, roots := range [][]string{{a, b, broken}, {broken, a, b}} {
+		d = mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", WorkspaceRoots: roots, Input: map[string]any{
+			"url": "/x.md", "metadata": map[string]any{"tags": "a"},
+		}})
+		if d.Decision != "block" || !strings.Contains(d.Reason, "several roots bound to different memories (one, two)") {
+			t.Fatalf("roots %v: want the ambiguity block, got %q (%s)", roots, d.Decision, d.Reason)
+		}
+	}
 }

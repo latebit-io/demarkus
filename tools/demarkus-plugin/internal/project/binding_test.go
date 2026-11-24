@@ -171,36 +171,64 @@ func TestBindingAndBrokenCheckouts(t *testing.T) {
 
 func TestBindTarget(t *testing.T) {
 	main, wt := layout(t)
-	bindings(t)
-
-	plain := filepath.Join(t.TempDir(), "plain")
-	for _, dir := range []string{main, filepath.Join(main, "tools"), plain} {
-		if got, err := BindTarget(dir); err != nil || got.Dir != dir || got.Replaces != nil {
-			t.Fatalf("BindTarget(%s) = %+v, %v; want the directory itself", dir, got, err)
-		}
-	}
-	got, err := BindTarget(wt)
-	if err != nil || got.Dir != main || !slices.Equal(got.Replaces, []string{wt}) {
-		t.Fatalf("BindTarget(worktree) = %+v, %v", got, err)
-	}
 	sub := filepath.Join(wt, "tools")
-	got, err = BindTarget(sub)
-	if err != nil || got.Dir != filepath.Join(main, "tools") || !slices.Equal(got.Replaces, []string{sub, wt}) {
-		t.Fatalf("BindTarget(worktree subdirectory) = %+v, %v", got, err)
+	plain := filepath.Join(t.TempDir(), "plain")
+
+	// Nothing recorded: nothing to replace, and the target is the main checkout's path.
+	bindings(t)
+	for dir, want := range map[string]string{main: main, filepath.Join(main, "tools"): filepath.Join(main, "tools"), plain: plain, wt: main, sub: filepath.Join(main, "tools")} {
+		if got, err := BindTarget(dir); err != nil || got.Dir != want || got.Replaces != nil {
+			t.Fatalf("BindTarget(%s) = %+v, %v; want %s replacing nothing", dir, got, err, want)
+		}
 	}
 	if _, err := BindTarget(""); !errors.Is(err, ErrNoDir) {
 		t.Fatalf("BindTarget(\"\") = %v, want ErrNoDir", err)
 	}
 
-	// One row per directory: a row spelling the main checkout another way goes.
-	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(filepath.Dir(main), link); err != nil {
-		t.Fatal(err)
+	// The worktree's own rows would outrank the main checkout's: they go.
+	bindings(t, [2]string{wt, "team"}, [2]string{sub, "team"}, [2]string{plain, "team"})
+	if got, err := BindTarget(wt); err != nil || got.Dir != main || !slices.Equal(got.Replaces, []string{wt}) {
+		t.Fatalf("BindTarget(worktree) = %+v, %v", got, err)
 	}
-	typed := filepath.Join(link, "app")
-	bindings(t, [2]string{typed, "team"})
-	if got, err := BindTarget(wt); err != nil || got.Dir != main || !slices.Equal(got.Replaces, []string{wt, typed}) {
-		t.Fatalf("BindTarget with a row spelled %s = %+v, %v", typed, got, err)
+	if got, err := BindTarget(sub); err != nil || !slices.Equal(got.Replaces, []string{sub, wt}) {
+		t.Fatalf("BindTarget(worktree subdirectory) = %+v, %v", got, err)
+	}
+
+	// One row per directory: other spellings of the target and of the
+	// worktree go too, or a lookup through one would find the old store.
+	links := t.TempDir()
+	for name, to := range map[string]string{"main": filepath.Dir(main), "wt": filepath.Dir(wt)} {
+		if err := os.Symlink(to, filepath.Join(links, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	typedMain, typedWT := filepath.Join(links, "main", "app"), filepath.Join(links, "wt", "app.feat")
+	bindings(t, [2]string{typedMain, "team"}, [2]string{typedWT, "team"})
+	if got, err := BindTarget(wt); err != nil || got.Dir != main || !slices.Equal(got.Replaces, []string{typedMain, typedWT}) {
+		t.Fatalf("BindTarget with rows under other spellings = %+v, %v", got, err)
+	}
+}
+
+// TestBindReachesEveryWorktree: a default set anywhere in a repository is
+// the repository's. A row another worktree still holds would keep that
+// worktree on the old store.
+func TestBindReachesEveryWorktree(t *testing.T) {
+	main, wt := layout(t)
+	other := filepath.Join(filepath.Dir(wt), "app.other")
+	projecttest.Worktree(t, filepath.Join(main, ".git"), other)
+
+	// A record naming a directory that is no worktree of this repository
+	// must not cost that directory its row.
+	victim := filepath.Join(t.TempDir(), "victim")
+	projecttest.Repo(t, victim, "")
+	projecttest.Write(t, filepath.Join(main, ".git", "worktrees", "forged", "gitdir"), filepath.Join(victim, ".git")+"\n")
+
+	bindings(t, [2]string{other, "team"}, [2]string{victim, "personal"}, [2]string{main, "team"})
+	for _, from := range []string{wt, main} {
+		got, err := BindTarget(from)
+		if err != nil || got.Dir != main || !slices.Equal(got.Replaces, []string{other}) {
+			t.Fatalf("BindTarget(%s) = %+v, %v; want %s replacing only %s", from, got, err, main, other)
+		}
 	}
 }
 

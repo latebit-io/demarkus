@@ -350,12 +350,14 @@ func projectDir(roots []string) (cwd, ambiguous string, err error) {
 	}
 	bindings := map[string]string{} // slug → first root bound to it
 	var order []string
+	unread := "" // first root git cannot identify
 	for _, r := range found {
 		bound, _, err := project.BoundStore(r)
-		// evalMemory words the unchecked destination; one unreadable root
-		// leaves the workspace's project unknown.
 		if errors.As(err, new(*project.IdentityError)) {
-			return r, "", nil
+			if unread == "" {
+				unread = r
+			}
+			continue
 		}
 		if err != nil {
 			return "", "", err
@@ -368,11 +370,16 @@ func projectDir(roots []string) (cwd, ambiguous string, err error) {
 			order = append(order, bound)
 		}
 	}
-	switch len(order) {
-	case 0:
-		return "", "", nil
-	case 1:
+	switch {
+	case len(order) > 1:
+		// Known roots already disagree; an unreadable one changes nothing.
+	case unread != "":
+		// evalMemory words the unchecked destination for this root.
+		return unread, "", nil
+	case len(order) == 1:
 		return bindings[order[0]], "", nil
+	default:
+		return "", "", nil
 	}
 	return "", fmt.Sprintf("this workspace has several roots bound to different memories (%s) and the write carries no cwd, so the project cannot be determined",
 		strings.Join(order, ", ")), nil

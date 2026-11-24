@@ -103,7 +103,9 @@ func upTo(dir, stop string) iter.Seq[string] {
 // directory is outside any checkout.
 func findCheckout(dir string) (checkout, error) {
 	for cur := range upTo(dir, "") {
-		fi, err := os.Stat(filepath.Join(cur, ".git"))
+		// dir may come from a repository's worktree record: only looked at, and
+		// trusted only once its own pointer names that repository.
+		fi, err := os.Stat(filepath.Join(cur, ".git")) //nolint:gosec // see above
 		if err == nil {
 			return readCheckout(cur, fi)
 		}
@@ -123,7 +125,7 @@ func readCheckout(top string, entry fs.FileInfo) (checkout, error) {
 	if entry.IsDir() {
 		return checkout{top: top, common: filepath.Join(top, ".git"), anchor: top}, nil
 	}
-	pointer, err := os.ReadFile(filepath.Join(top, ".git"))
+	pointer, err := os.ReadFile(filepath.Join(top, ".git")) //nolint:gosec // as findCheckout
 	if err != nil {
 		return checkout{}, unidentified("its .git file is unreadable", err)
 	}
@@ -151,11 +153,57 @@ func readCheckout(top string, entry fs.FileInfo) (checkout, error) {
 	if !sameDir(filepath.Dir(gitDir), filepath.Join(common, "worktrees")) {
 		return checkout{}, unidentified("its worktree record is outside its repository", nil)
 	}
-	anchor := common
-	if strings.HasPrefix(filepath.Base(common), ".") {
-		anchor = filepath.Dir(common)
+	anchor, err := mainCheckout(common)
+	if err != nil {
+		return checkout{}, err
 	}
 	return checkout{top: top, common: common, anchor: anchor, linked: true}, nil
+}
+
+// mainCheckout is where a linked worktree's repository is checked out: beside
+// a dot-named git dir, at core.worktree, or the git dir itself when bare.
+func mainCheckout(common string) (string, error) {
+	if strings.HasPrefix(filepath.Base(common), ".") {
+		return filepath.Dir(common), nil
+	}
+	vals, err := readGitConfig(filepath.Join(common, "config"))
+	switch {
+	case err != nil:
+		return "", unidentified("its repository config is unreadable", err)
+	case vals.worktree != "":
+		return absFrom(common, vals.worktree), nil
+	case vals.bare:
+		return common, nil
+	}
+	// A git dir kept apart records no way back to its checkout, and git
+	// reports the git dir. Naming that would give one repository two anchors.
+	return "", unidentified("its repository's main checkout cannot be found", nil)
+}
+
+// worktrees are the tops of the linked worktrees of co's repository. Each is
+// confirmed by its own pointer: a record alone could name any directory.
+func worktrees(co checkout) []string {
+	records := filepath.Join(co.common, "worktrees")
+	entries, err := os.ReadDir(records)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintln(os.Stderr, "[demarkus-plugin] project: worktree records: "+err.Error())
+		}
+		return nil
+	}
+	var tops []string
+	for _, e := range entries {
+		record := filepath.Join(records, e.Name())
+		back, err := os.ReadFile(filepath.Join(record, "gitdir")) //nolint:gosec // the repository's own record
+		if err != nil {
+			continue // a record being pruned names no worktree
+		}
+		top := filepath.Dir(absFrom(record, strings.TrimSpace(string(back))))
+		if wt, err := findCheckout(top); err == nil && wt.top == top && wt.linked && sameDir(wt.common, co.common) {
+			tops = append(tops, top)
+		}
+	}
+	return tops
 }
 
 func absFrom(base, p string) string {
