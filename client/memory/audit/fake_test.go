@@ -28,14 +28,14 @@ type fakeStore struct {
 	docs       map[string]fakeDoc
 	pageSize   int
 	listCalls  int
-	fetchCalls int
+	fetched    map[string]int    // path -> fetches
 	listStatus map[string]string // dir -> status override
 	missing    map[string]string // path outside docs -> fetch status
 	stuck      bool              // return the first page with the same cursor forever
 }
 
 func newFake(docs map[string]fakeDoc) *fakeStore {
-	return &fakeStore{docs: docs, pageSize: 2, listStatus: map[string]string{}, missing: map[string]string{}}
+	return &fakeStore{docs: docs, pageSize: 2, listStatus: map[string]string{}, missing: map[string]string{}, fetched: map[string]int{}}
 }
 
 func (f *fakeStore) Authority() string { return f.host }
@@ -97,7 +97,7 @@ func (f *fakeStore) List(_ context.Context, dir string, includeArchived bool, cu
 }
 
 func (f *fakeStore) Fetch(_ context.Context, docPath string) (protocol.Response, error) {
-	f.fetchCalls++
+	f.fetched[docPath]++
 	if base := path.Base(docPath); strings.HasPrefix(base, "v") {
 		if v, err := strconv.Atoi(base[1:]); err == nil {
 			d, ok := f.docs[path.Dir(docPath)]
