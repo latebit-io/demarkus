@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project/projecttest"
 )
 
 // setupHome points ~/.demarkus at a temp dir and writes the given fixture files
@@ -581,5 +582,84 @@ func TestUnpinnedSourceGate(t *testing.T) {
 	}
 	if pinned := mustEval(t, pins("/adr/a.md/v3")); pinned.Decision != "allow" {
 		t.Fatalf("pinned: got %q (%s)", pinned.Decision, pinned.Reason)
+	}
+}
+
+// A linked worktree is held to its main checkout's binding, or a worktree
+// of a bound project could write to any store unchecked.
+func TestDestinationGateFollowsTheMainCheckout(t *testing.T) {
+	home := setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	main, wt := filepath.Join(home, "src", "app"), filepath.Join(home, "wt", "app.feat")
+	projecttest.Repo(t, main, projecttest.Origin("https://example.com/org/app.git"))
+	projecttest.Worktree(t, filepath.Join(main, ".git"), wt)
+	bindings := filepath.Join(home, ".demarkus", "project-souls")
+	if err := os.WriteFile(bindings, []byte(main+"\tother\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write := func(cwd string) Decision {
+		return mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Cwd: cwd, Input: map[string]any{
+			"url": "/x.md", "metadata": map[string]any{"tags": "a"},
+		}})
+	}
+	if d := write(wt); d.Decision != "block" || !strings.Contains(d.Reason, "bound to store 'other'") {
+		t.Fatalf("worktree of a bound project: want block, got %q (%s)", d.Decision, d.Reason)
+	}
+	if err := os.WriteFile(bindings, []byte(main+"\tdemarkus-memory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if d := write(wt); d.Decision != "allow" {
+		t.Fatalf("write to the main checkout's store: want allow, got %q (%s)", d.Decision, d.Reason)
+	}
+}
+
+// A checkout git's files cannot name has no binding to check against: the
+// write is warned about, and every other guard still runs.
+func TestDestinationGateOnAnUnidentifiedCheckout(t *testing.T) {
+	home := setupHome(t, map[string]string{"plugin-memory.conf": "SOUL_DIR=/x\nPORT=6310\nMODE=default\n"})
+	broken := filepath.Join(home, "broken")
+	projecttest.Broken(t, broken, "not a pointer\n")
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "project-souls"), []byte(home+"\tother\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Cwd: broken, Input: map[string]any{
+		"url": "/x.md", "metadata": map[string]any{"tags": "a"},
+	}})
+	if d.Decision != "warn" || !strings.Contains(d.Reason, "destination was not checked") {
+		t.Fatalf("unidentified checkout: want warn, got %q (%s)", d.Decision, d.Reason)
+	}
+	d = mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", Cwd: broken, Input: map[string]any{"url": "/x.md"}})
+	if !strings.Contains(d.Reason, "destination was not checked") || !strings.Contains(d.Reason, "has no metadata.tags") {
+		t.Fatalf("the tag gate must still speak on an unidentified checkout: got %q (%s)", d.Decision, d.Reason)
+	}
+
+	// A multi-root workspace with one unreadable root is as unknown as a
+	// single one: the same warning, the other guards still running.
+	other := filepath.Join(home, "other")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d = mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", WorkspaceRoots: []string{other, broken}, Input: map[string]any{"url": "/x.md"}})
+	if !strings.Contains(d.Reason, "destination was not checked") || !strings.Contains(d.Reason, "has no metadata.tags") {
+		t.Fatalf("multi-root with an unidentified root: got %q (%s)", d.Decision, d.Reason)
+	}
+
+	// Roots that already disagree stay ambiguous: an unreadable one beside
+	// them must not turn a blocked write into a warned one.
+	a, b := filepath.Join(home, "a"), filepath.Join(home, "b")
+	for _, dir := range []string{a, b} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(home, ".demarkus", "project-souls"), []byte(a+"\tone\n"+b+"\ttwo\n"+home+"\tother\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, roots := range [][]string{{a, b, broken}, {broken, a, b}} {
+		d = mustEval(t, &Input{Tool: "demarkus_memory_mark_publish", WorkspaceRoots: roots, Input: map[string]any{
+			"url": "/x.md", "metadata": map[string]any{"tags": "a"},
+		}})
+		if d.Decision != "block" || !strings.Contains(d.Reason, "several roots bound to different memories (one, two)") {
+			t.Fatalf("roots %v: want the ambiguity block, got %q (%s)", roots, d.Decision, d.Reason)
+		}
 	}
 }

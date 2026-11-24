@@ -18,6 +18,21 @@ func stubProbe(t *testing.T, st ProjectStatus) {
 	prev := probeProject
 	probeProject = func(context.Context, string, string) ProjectStatus { return st }
 	t.Cleanup(func() { probeProject = prev })
+	stubEarlier(t, "")
+}
+
+// stubEarlier answers the earlier-root probe ("" for no live root) and
+// records what it was asked.
+func stubEarlier(t *testing.T, root string) *[]string {
+	t.Helper()
+	var asked []string
+	prev := probeEarlier
+	probeEarlier = func(_ context.Context, store, slug string) (string, error) {
+		asked = append(asked, store+" "+slug)
+		return root, nil
+	}
+	t.Cleanup(func() { probeEarlier = prev })
+	return &asked
 }
 
 var app = project.Resolution{Slug: "app", Store: "soul", State: project.StateBound}

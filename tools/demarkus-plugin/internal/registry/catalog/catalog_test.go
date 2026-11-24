@@ -12,11 +12,17 @@ import (
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 )
 
+// bindAt binds dir itself, as a directory outside any checkout resolves.
+func bindAt(dir, slug string) error {
+	_, err := BindProject(func() (BindTarget, error) { return BindTarget{Dir: dir}, nil }, slug)
+	return err
+}
+
 func TestProjectBindSetUsesTransactionWriter(t *testing.T) {
 	home := registrytest.SetupHome(t)
 	registrytest.RegisterRow(t, config.MemoryRow{Slug: "remote", Host: "mark://remote.example", TokenFile: "-"})
 	registrytest.FailWritesTo(t, "project-souls")
-	if err := BindProject(filepath.Join(home, "repo"), "remote"); err == nil {
+	if err := bindAt(filepath.Join(home, "repo"), "remote"); err == nil {
 		t.Fatal("BindProject succeeded despite injected write failure")
 	}
 	path, err := config.StatePath("project-souls")
@@ -32,7 +38,7 @@ func TestProjectBindSetRejectsRecordDelimiters(t *testing.T) {
 	registrytest.SetupHome(t)
 	registrytest.RegisterRow(t, config.MemoryRow{Slug: "remote", Host: "mark://remote.example", TokenFile: "-"})
 	for _, dir := range []string{"/repo\tother", "/repo\rnext", "/repo\nnext", "/repo\x00next", " relative", "relative "} {
-		if err := BindProject(dir, "remote"); err == nil {
+		if err := bindAt(dir, "remote"); err == nil {
 			t.Errorf("binding directory %q should error", dir)
 		}
 	}

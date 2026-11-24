@@ -48,7 +48,7 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
 
    `MANUAL` rows: show them, offer adoption. Re-join the selected host through this command, register the managed MCP server, then run `claude mcp list` or make its first `mark_fetch` call. Remove the old entry with `claude mcp remove '<name>'` only after `<slug>` reports connected; if the live check fails, keep the old entry and surface diagnostics. User declines or `NONE`: continue.
 
-2. Validate, store credentials, add the soul catalog row, bind the absolute current project directory:
+2. Validate, store credentials, add the soul catalog row, bind the absolute current project directory (a git worktree: its main checkout):
 
    ```bash
    "$HOME/.demarkus/bin/demarkus-plugin" registry memory-join <shell-escaped-host> --bind "${CLAUDE_PROJECT_DIR}"

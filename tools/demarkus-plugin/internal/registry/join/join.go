@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/broker"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/statefile"
@@ -97,7 +98,7 @@ type joinPlan struct {
 	row              config.MemoryRow
 	token            string // raw token to store; "" for a tokenless join
 	managedTokenFile string
-	bindDir          string
+	bindDir          string // "" when no binding is requested
 	memoriesPath     string
 	bindingsPath     string // "" when no binding is requested
 }
@@ -206,7 +207,12 @@ func (p *joinPlan) mutations() ([]statefile.Mutation, string, error) {
 		mutations = append(mutations, *tokenDelete)
 	}
 	if p.bindDir != "" {
-		binding, err := catalog.BindingMutation(p.bindDir, p.row.Slug, p.bindingsPath)
+		// Resolved here, under the bindings lock: the rows it replaces are the rows there.
+		target, err := project.BindTarget(p.bindDir)
+		if err != nil {
+			return nil, "", err
+		}
+		binding, err := catalog.BindingMutation(target, p.row.Slug, p.bindingsPath)
 		if err != nil {
 			return nil, "", err
 		}

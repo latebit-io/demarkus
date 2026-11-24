@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -227,35 +228,36 @@ func ListRemoteMemories() ([]string, error) {
 	return out, nil
 }
 
-// ProjectBinding the catalog slug bound to DIR, checking DIR then its ancestors
-// (nearest wins). "" when unbound.
-func ProjectBinding(dir string) (string, error) {
+// Binding is one project-souls row: a directory and the catalog id it writes to.
+type Binding struct{ Dir, Store string }
+
+// Bindings are the project-souls rows in file order.
+type Bindings []Binding
+
+// ProjectBindings reads the project-souls rows; malformed rows are skipped.
+func ProjectBindings() (Bindings, error) {
 	rows, err := Records("project-souls")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if len(rows) == 0 {
-		return "", nil
-	}
-	m := make(map[string]string, len(rows))
+	out := make(Bindings, 0, len(rows))
 	for _, r := range rows {
 		f := strings.SplitN(r, "\t", 2)
 		if len(f) == 2 && f[0] != "" {
-			m[f[0]] = f[1]
+			out = append(out, Binding{Dir: f[0], Store: f[1]})
 		}
 	}
-	cur := dir
-	for cur != "" {
-		if slug, ok := m[cur]; ok {
-			return slug, nil
+	return out, nil
+}
+
+// Lookup is the store bound to exactly dir; the last row for it wins.
+func (b Bindings) Lookup(dir string) (string, bool) {
+	for _, row := range slices.Backward(b) {
+		if row.Dir == dir {
+			return row.Store, true
 		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			break
-		}
-		cur = parent
 	}
-	return "", nil
+	return "", false
 }
 
 // --- MCP server names ---------------------------------------------------------

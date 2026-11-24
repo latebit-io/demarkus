@@ -34,11 +34,13 @@ func Hint(r project.Resolution) string {
 // project's directory in the store.
 func header(r project.Resolution, root string) string {
 	store := "Bound store: `" + r.Store + "`."
-	switch r.State {
-	case project.StateLocal:
+	switch {
+	case r.State == project.StateLocal:
 		store = "Bound store: `" + r.Store + "` (local, no project binding)."
-	case project.StateStale:
+	case r.State == project.StateStale:
 		store = "Bound store: `" + r.Store + "` (stale: " + Hint(r) + ")."
+	case r.Inherited:
+		store = "Bound store: `" + r.Store + "` (the main checkout's binding)."
 	}
 	return "Project slug: `" + r.Slug + "`. Project root: `" + root + "`. " + store
 }

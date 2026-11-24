@@ -56,7 +56,7 @@ client/memory/...                               model
 tools/demarkus-plugin/internal/config           soul
 tools/demarkus-plugin/internal/hosttools        surface
 tools/demarkus-plugin/internal/lockdir          soul
-tools/demarkus-plugin/internal/project          soul
+tools/demarkus-plugin/internal/project/...      soul
 tools/demarkus-plugin/internal/provision/...    soul
 tools/demarkus-plugin/internal/registry/...     soul
 tools/demarkus-plugin/internal/semver           soul

@@ -1,6 +1,7 @@
 package hosttools
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/latebit-io/demarkus/client/mcpfmt"
 	"github.com/latebit-io/demarkus/client/mcpfmt/mcpfmttest"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project/projecttest"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision/release"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/registrytest"
 )
@@ -128,5 +130,68 @@ func TestDefaultListingFlagsStaleBinding(t *testing.T) {
 	}
 	if got := strings.Join(DefaultListing(nil, ""), "\n"); got != "EMPTY" {
 		t.Fatalf("unbound empty: %q", got)
+	}
+}
+
+// A default set from a linked worktree binds the repository: the row lands
+// on the main checkout, and the worktree's own row, which would outrank it,
+// goes. The answer stays the exact `OK <slug>` every prompt release matches.
+func TestDefaultFromAWorktreeBindsTheMainCheckout(t *testing.T) {
+	home := registrytest.SetupHome(t)
+	registrytest.RegisterRow(t, config.MemoryRow{Slug: "soul", Host: "mark://soul.example"})
+	registrytest.RegisterRow(t, config.MemoryRow{Slug: "old", Host: "mark://old.example"})
+	root := t.TempDir()
+	main, wt, other := filepath.Join(root, "app"), filepath.Join(root, "app.feat"), filepath.Join(root, "other")
+	projecttest.Repo(t, main, projecttest.Origin("https://example.com/org/app.git"))
+	projecttest.Worktree(t, filepath.Join(main, ".git"), wt)
+	bindings := filepath.Join(home, ".demarkus", "project-souls")
+	if err := os.WriteFile(bindings, []byte(wt+"\told\n"+other+"\told\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Call(SetupTool, map[string]any{"action": "default", "dir": wt, "slug": "soul"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "OK soul" {
+		t.Fatalf("default = %q, want exactly %q", got, "OK soul")
+	}
+	rows, err := os.ReadFile(bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := other + "\told\n" + main + "\tsoul\n"; string(rows) != want {
+		t.Fatalf("project-souls = %q, want %q", rows, want)
+	}
+	for _, dir := range []string{wt, main} {
+		got, err = Call(ReadTool, map[string]any{"action": "catalog", "dir": dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(got, "soul\tremote\tmark://soul.example\t0\t*") || strings.Contains(got, "old\tremote\tmark://old.example\t0\t*") {
+			t.Fatalf("catalog from %s does not star the repository's store:\n%s", dir, got)
+		}
+	}
+}
+
+// A relative directory binds the path it names, not the literal text.
+func TestDefaultBindsARelativeDirAbsolutely(t *testing.T) {
+	home := registrytest.SetupHome(t)
+	registrytest.RegisterRow(t, config.MemoryRow{Slug: "soul", Host: "mark://soul.example"})
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if _, err := Call(SetupTool, map[string]any{"action": "default", "dir": ".", "slug": "soul"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := os.ReadFile(filepath.Join(home, ".demarkus", "project-souls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rows) != cwd+"\tsoul\n" {
+		t.Fatalf("project-souls = %q, want the absolute %q", rows, cwd)
 	}
 }
