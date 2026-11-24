@@ -66,23 +66,67 @@ func (s soul) fetch(ctx context.Context, p string) (protocol.Response, error) {
 	return r.Response, err
 }
 
-// probeStore probes the catalog store for the project. Broker stores need the
-// harness's OAuth session, so they are not probed.
-func probeStore(ctx context.Context, store, slug string) ProjectStatus {
+// errHosted marks a broker store: it needs the harness's OAuth session, so
+// session start does not probe it.
+var errHosted = errors.New("hosted store, not checked")
+
+// openSoul dials the catalog store; the caller closes it.
+func openSoul(store string) (soul, func(), error) {
 	ep, err := catalog.Resolve(store)
 	if err != nil {
-		return unknownStatus(slug, err.Error())
+		return soul{}, nil, err
 	}
 	if ep.Broker {
-		return unknownStatus(slug, "hosted store, not checked")
+		return soul{}, nil, errHosted
 	}
 	host, err := links.DialHost(ep.Host)
 	if err != nil {
-		return unknownStatus(slug, fmt.Sprintf("store host %s: %v", ep.Host, err))
+		return soul{}, nil, fmt.Errorf("store host %s: %w", ep.Host, err)
 	}
 	c := fetch.NewClient(fetch.Options{Insecure: ep.Insecure, DialTimeout: probeDial, RequestTimeout: probeRequest, KeepAlivePeriod: -1})
-	defer c.Close()
-	return probe(ctx, soul{reader: c, host: host, token: ep.Token}, slug)
+	return soul{reader: c, host: host, token: ep.Token}, func() { c.Close() }, nil
+}
+
+// probeStore probes the catalog store for the project.
+func probeStore(ctx context.Context, store, slug string) ProjectStatus {
+	s, done, err := openSoul(store)
+	if err != nil {
+		return unknownStatus(slug, err.Error())
+	}
+	defer done()
+	return probe(ctx, s, slug)
+}
+
+// earlierStore is the root in store holding a live hub for slug, "" for none:
+// where a checkout wrote while its directory name was its project.
+func earlierStore(ctx context.Context, store, slug string) (string, error) {
+	s, done, err := openSoul(store)
+	if errors.Is(err, errHosted) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer done()
+	l, err := layout.Read(ctx, s.fetch)
+	if err != nil {
+		return "", err
+	}
+	root := l.Root(slug)
+	// An archived hub is a root already retired: only an OK one counts.
+	for _, p := range hub.Paths(root) {
+		resp, err := s.fetch(ctx, p)
+		if err != nil {
+			return "", fmt.Errorf("fetch %s: %w", p, err)
+		}
+		if resp.Status == protocol.StatusOK {
+			return root, nil
+		}
+		if resp.Status != protocol.StatusNotFound {
+			break
+		}
+	}
+	return "", nil
 }
 
 // probe reads the template and the default hub together. A template naming

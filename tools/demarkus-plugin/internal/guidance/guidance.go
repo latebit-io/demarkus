@@ -133,6 +133,10 @@ func projectHeader(dir, warn string, brand config.Brand) (header, status string,
 		if slugErr, ok := errors.AsType[*project.SlugError](err); ok {
 			return "Project slug: none (" + slugErr.Error() + ").", slugStatus(slugErr, brand), nil
 		}
+		// No root is named, so nothing lands under a guessed one.
+		if idErr, ok := errors.AsType[*project.IdentityError](err); ok {
+			return "Project slug: none (" + idErr.Error() + ").", identityStatus(idErr, brand), nil
+		}
 		return "", "", err
 	}
 	if r.State == project.StateLocal {

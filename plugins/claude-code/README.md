@@ -43,7 +43,7 @@ The same plugin runs in Cowork with local MCP servers enabled. Its MCP server st
 
 ## Local state
 
-The plugin's MCP launcher bootstraps the shared `demarkus-plugin` helper, which keeps its state under `~/.demarkus/`: the managed server, its token, `plugin-memory.conf`, and per-project soul bindings in `project-souls`.
+The plugin's MCP launcher bootstraps the shared `demarkus-plugin` helper, which keeps its state under `~/.demarkus/`: the managed server, its token, `plugin-memory.conf`, and per-project soul bindings in `project-souls`. A binding is keyed by directory; a git worktree without its own row follows its main checkout's.
 
 ## Development
 

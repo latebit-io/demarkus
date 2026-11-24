@@ -40,7 +40,7 @@ Hosted soul: skip the QUIC join and MCP-registration steps below, but still appl
 
 ## Join
 
-1. Validate, store credentials, add the soul catalog row, bind the absolute current project directory:
+1. Validate, store credentials, add the soul catalog row, bind the absolute current project directory (a git worktree: its main checkout):
 
    ```bash
    "$HOME/.demarkus/bin/demarkus-plugin" registry memory-join <shell-escaped-host> --bind <shell-escaped-absolute-project-dir>

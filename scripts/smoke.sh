@@ -231,7 +231,8 @@ watch_lines() {
 watch_stream() {
   local U=$1 hash
   expect "watched publish creates v1" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=domain:smoke -meta agent=smoke -body "# W" "$U/watched/w.md"
-  expect "watched append makes v2" 'created' -- "${C[@]}" -X APPEND -auth "$W" -body "more" "$U/watched/w.md"
+  # agent names one write and is never inherited (SPEC 6.6): the append states its own.
+  expect "watched append makes v2" 'created' -- "${C[@]}" -X APPEND -auth "$W" -meta agent=smoke -body "more" "$U/watched/w.md"
   expect "publish beside the watched prefix" 'created' -- "${C[@]}" -X PUBLISH -auth "$W" -expected-version 0 -meta tags=domain:smoke -body "# Beside" "$U/beside/b.md"
   watch_lines 2
   # The line ends with the agent then the user column, empty for a token write.
@@ -403,8 +404,9 @@ smoke_file() {
   local U="mark://localhost:$FILE_PORT" before_restart
   echo "== file server"
   mkdir -p "$WORK/root"
+  # start_file [VAR=value...]: extra environment for this start.
   start_file() {
-    start_server "$U" "$WORK/file.log" env DEMARKUS_ROOT="$WORK/root" DEMARKUS_PORT="$FILE_PORT" \
+    start_server "$U" "$WORK/file.log" env "$@" DEMARKUS_ROOT="$WORK/root" DEMARKUS_PORT="$FILE_PORT" \
       DEMARKUS_TOKENS="$WORK/tokens.toml" server/bin/demarkus-server
   }
   start_file || return 1
@@ -415,8 +417,9 @@ smoke_file() {
   stop_server
   expect "drain with an open watch completes" 'all connections drained' -- tail -n 8 "$WORK/file.log"
   before_restart=$(wc -l <"$WORK/file.log")
-  start_file || return 1
-  expect "restart rebuilds the index and catalog" 'document index built.*entries=[1-9]' -- tail -n 12 "$WORK/file.log"
+  # A watch opening is logged at debug; the reconnect check below waits on it.
+  start_file DEMARKUS_LOG_LEVEL=debug || return 1
+  expect "restart rebuilds the index and catalog" 'document index built.*entries=[1-9]' -- tail -n "+$((before_restart + 1))" "$WORK/file.log"
   expect "restart serves the same data" 'version=2' -- "${C[@]}" "$U/docs/a.md"
   expect "restart keeps a valid chain" 'chain-valid=true' -- "${C[@]}" -X VERSIONS "$U/docs/a.md"
   # The watch outlives the restart without a resync: the change journal

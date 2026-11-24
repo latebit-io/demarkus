@@ -46,6 +46,25 @@ Then the agent files as it goes:
 
 Each project keeps a hub at `/<project>/index.md`; new documents link from it on first publish. The store's `/.well-known/demarkus/template.md` declares the layout.
 
+### Which project
+
+A git checkout is its repository's project, whatever its directory is called, so every worktree and clone shares one root and one soul. First match names it:
+
+| Source | Example |
+|---|---|
+| `git config demarkus.project <slug>` | `client-a-api` |
+| The `origin` remote's repository name | `git@github.com:org/app.git` is `app` |
+| A linked worktree's main checkout | `.worktrees/app.feat-12` is `app` |
+| The directory name | anything outside git |
+
+- A directory below the checkout's top level keeps its own name: `mono/packages/web` is `web`.
+- Two unrelated repositories with one name share a root. Set `demarkus.project` in one of them; worktrees read it from the shared config.
+- A worktree writes to its main checkout's soul. `/soul-default` run from a worktree binds the main checkout.
+- A checkout that once had a root under its directory name gets an `Earlier root:` line at session start, naming where the older notes are.
+- Repointing `origin` at a repository with another name moves the project to that name.
+
+The plugin reads the repository's own `.git` files and never runs git for this; global git config is ignored.
+
 ## Recall
 
 - `mark_lookup` finds by tag and title, or section text with `match=body`. With a `budget` it returns the matching passages plus related documents.

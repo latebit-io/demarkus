@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/broker"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/statefile"
@@ -97,7 +98,7 @@ type joinPlan struct {
 	row              config.MemoryRow
 	token            string // raw token to store; "" for a tokenless join
 	managedTokenFile string
-	bindDir          string
+	bind             catalog.BindTarget
 	memoriesPath     string
 	bindingsPath     string // "" when no binding is requested
 }
@@ -105,12 +106,15 @@ type joinPlan struct {
 // planJoin resolves the state files a join touches; shared by the QUIC and
 // broker paths. The reserved local slug is rejected at commit, under the lock.
 func planJoin(row config.MemoryRow, token, bindDir string) (*joinPlan, error) {
-	plan := &joinPlan{row: row, token: token, bindDir: bindDir}
+	plan := &joinPlan{row: row, token: token}
 	var err error
 	if plan.memoriesPath, err = config.StatePath("souls"); err != nil {
 		return nil, err
 	}
 	if bindDir != "" {
+		if plan.bind, err = project.BindTarget(bindDir); err != nil {
+			return nil, err
+		}
 		if plan.bindingsPath, err = config.StatePath("project-souls"); err != nil {
 			return nil, err
 		}
@@ -205,8 +209,8 @@ func (p *joinPlan) mutations() ([]statefile.Mutation, string, error) {
 	if tokenDelete != nil {
 		mutations = append(mutations, *tokenDelete)
 	}
-	if p.bindDir != "" {
-		binding, err := catalog.BindingMutation(p.bindDir, p.row.Slug, p.bindingsPath)
+	if p.bindingsPath != "" {
+		binding, err := catalog.BindingMutation(p.bind, p.row.Slug, p.bindingsPath)
 		if err != nil {
 			return nil, "", err
 		}

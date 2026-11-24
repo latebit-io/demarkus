@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project/projecttest"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/knowledge"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/registrytest"
@@ -375,5 +376,28 @@ func TestValidateBrokerEndpointRejectsUserinfo(t *testing.T) {
 	// No catalog row may exist for the bogus "user" slug.
 	if _, ok, err := catalog.RemoteRow("user"); err != nil || ok {
 		t.Fatalf("catalog row after rejected join: ok=%v err=%v", ok, err)
+	}
+}
+
+// A join from a linked worktree binds the main checkout, as /soul-default does.
+func TestMemoryJoinFromAWorktreeBindsTheMainCheckout(t *testing.T) {
+	home := registrytest.SetupHome(t)
+	root := t.TempDir()
+	main, wt := filepath.Join(root, "app"), filepath.Join(root, "app.feat")
+	projecttest.Repo(t, main, projecttest.Origin("https://example.com/org/app.git"))
+	projecttest.Worktree(t, filepath.Join(main, ".git"), wt)
+	bindings := filepath.Join(home, ".demarkus", "project-souls")
+	if err := os.WriteFile(bindings, []byte(wt+"\tgone\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Memory("soul.demarkus.io", "secret", false, wt); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := os.ReadFile(bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := main + "\tsoul\n"; string(rows) != want {
+		t.Fatalf("project-souls = %q, want %q", rows, want)
 	}
 }

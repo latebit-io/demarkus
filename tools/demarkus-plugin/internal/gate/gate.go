@@ -4,6 +4,7 @@ package gate
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -18,8 +19,8 @@ import (
 	"github.com/latebit-io/demarkus/protocol/provenance"
 	"github.com/latebit-io/demarkus/protocol/publishpolicy"
 	"github.com/latebit-io/demarkus/protocol/storefmt"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/host"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/taint"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/toolname"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -350,7 +351,12 @@ func projectDir(roots []string) (cwd, ambiguous string, err error) {
 	bindings := map[string]string{} // slug → first root bound to it
 	var order []string
 	for _, r := range found {
-		bound, err := config.ProjectBinding(r)
+		bound, _, err := project.BoundStore(r)
+		// evalMemory words the unchecked destination; one unreadable root
+		// leaves the workspace's project unknown.
+		if errors.As(err, new(*project.IdentityError)) {
+			return r, "", nil
+		}
 		if err != nil {
 			return "", "", err
 		}
@@ -390,8 +396,13 @@ func evalMemory(pt toolname.Parsed, args map[string]any, cwd, memoryID, ambiguou
 			"demarkus write to %s: %s. Open a single workspace root, or run /soul-default so the roots agree; to relax this check, set DEMARKUS_MEMORY_DEST_STRICTNESS=warn (or ask).",
 			urlOr(args, "this document"), ambiguous)})
 	} else if pt.Verb == "publish" || pt.Verb == "append" {
-		bound, err := config.ProjectBinding(cwd)
-		if err != nil {
+		bound, _, err := project.BoundStore(cwd)
+		// A checkout git cannot identify has no binding to hold the write to:
+		// say so and keep the other guards, rather than fail the whole gate open.
+		if idErr, ok := errors.AsType[*project.IdentityError](err); ok {
+			decisions = append(decisions, Decision{Decision: "warn", Reason: fmt.Sprintf(
+				"demarkus write to %s: its destination was not checked (%s).", urlOr(args, "this document"), idErr.Error())})
+		} else if err != nil {
 			return Decision{}, err
 		}
 		if bound != "" && bound != memoryID {

@@ -7,11 +7,12 @@ package hosttools
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/latebit-io/demarkus/client/mcpfmt"
-	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/config"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/guidance"
+	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/project"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/provision"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/catalog"
 	"github.com/latebit-io/demarkus/tools/demarkus-plugin/internal/registry/promote"
@@ -156,7 +157,7 @@ func Project(dir string) (string, error) {
 // rows, plus a trailing STALE line when the binding names a memory the
 // catalog lacks, so callers stop instead of falling back to the local memory.
 func Catalog(dir string) (string, error) {
-	current, err := config.ProjectBinding(dir)
+	current, _, err := project.BoundStore(dir)
 	if err != nil {
 		return "", err
 	}
@@ -198,10 +199,19 @@ func Init(mode string, port int, root string) (string, error) {
 	return "OK: provisioned (mode=" + mode + ")", nil
 }
 
-// Default is `registry memory-default --set`: binds dir's default memory.
+// Default is `registry memory-default --set`: binds dir's default memory. A
+// linked worktree binds its main checkout, so the repository has one store.
+// The answer stays `OK <slug>` for prompts of any release; the note is stderr's.
 func Default(dir, slug string) (string, error) {
-	if err := catalog.BindProject(dir, slug); err != nil {
+	target, err := project.BindTarget(dir)
+	if err != nil {
 		return "", err
+	}
+	if err := catalog.BindProject(target, slug); err != nil {
+		return "", err
+	}
+	if len(target.Replaces) > 0 {
+		fmt.Fprintln(os.Stderr, "[demarkus-plugin] memory-default: bound the main checkout "+target.Dir+"; its worktrees follow it")
 	}
 	return "OK " + slug, nil
 }

@@ -137,9 +137,16 @@ func IsMemory(slug string) (bool, error) {
 	return slices.Contains(remotes, slug), nil
 }
 
-// BindProject records that DIR writes to catalog memory SLUG by default. Locked
-// + atomic; validates SLUG is a joined memory first.
-func BindProject(dir, slug string) error {
+// BindTarget is the bindings row a default is recorded on and the rows it
+// replaces; project.BindTarget derives it from a directory.
+type BindTarget struct {
+	Dir      string
+	Replaces []string
+}
+
+// BindProject records that target writes to catalog memory SLUG by default.
+// Locked + atomic; validates SLUG is a joined memory first.
+func BindProject(target BindTarget, slug string) error {
 	memoriesPath, err := config.StatePath("souls")
 	if err != nil {
 		return err
@@ -157,7 +164,7 @@ func BindProject(dir, slug string) error {
 			if !ok {
 				return fmt.Errorf("'%s' is not a joined memory; run /soul-join first (see /soul-default --list)", slug)
 			}
-			mutation, err := BindingMutation(dir, slug, bindingsPath)
+			mutation, err := BindingMutation(target, slug, bindingsPath)
 			if err != nil {
 				return err
 			}
@@ -307,9 +314,10 @@ func RejectLocalName(slug string) error {
 	return nil
 }
 
-// BindingMutation prepares the bindings file with dir bound to slug, other rows kept.
-func BindingMutation(dir, slug, path string) (statefile.Mutation, error) {
-	if err := statefile.ValidateField("project binding directory", dir); err != nil {
+// BindingMutation prepares the bindings file with target bound to slug, the
+// rows it replaces gone and the rest kept.
+func BindingMutation(target BindTarget, slug, path string) (statefile.Mutation, error) {
+	if err := statefile.ValidateField("project binding directory", target.Dir); err != nil {
 		return statefile.Mutation{}, err
 	}
 	bindings, err := config.Records("project-souls")
@@ -318,10 +326,10 @@ func BindingMutation(dir, slug, path string) (statefile.Mutation, error) {
 	}
 	bound := make([]string, 0, len(bindings)+1)
 	for _, row := range bindings {
-		if strings.SplitN(row, "\t", 2)[0] != dir {
+		if key, _, _ := strings.Cut(row, "\t"); key != target.Dir && !slices.Contains(target.Replaces, key) {
 			bound = append(bound, row)
 		}
 	}
-	bound = append(bound, dir+"\t"+slug)
+	bound = append(bound, target.Dir+"\t"+slug)
 	return statefile.Put(path, []byte(strings.Join(bound, "\n")+"\n"), 0o644)
 }
