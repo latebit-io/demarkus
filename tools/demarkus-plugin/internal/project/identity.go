@@ -21,7 +21,10 @@ const (
 
 // IdentityError reports a checkout whose git files cannot name its project.
 // Reason is fixed text: those files are repository content, never echoed.
-type IdentityError struct{ Reason string }
+type IdentityError struct {
+	Reason     string
+	Unreadable bool // a read failed: the checkout may be sound, it could not be seen
+}
 
 func (e *IdentityError) Error() string {
 	return "git cannot identify this checkout: " + e.Reason + "; ask the user which project"
@@ -33,7 +36,7 @@ func unidentified(reason string, cause error) *IdentityError {
 	if cause != nil {
 		fmt.Fprintln(os.Stderr, "[demarkus-plugin] project: "+reason+": "+cause.Error())
 	}
-	return &IdentityError{Reason: reason}
+	return &IdentityError{Reason: reason, Unreadable: cause != nil}
 }
 
 // identify names dir's project from git's own files, never by running git:
@@ -136,7 +139,10 @@ func readCheckout(top string, entry fs.FileInfo) (checkout, error) {
 	gitDir = absFrom(top, gitDir)
 	// gitDir is the checkout's own pointer: following it is the job. What it
 	// yields is two names and never echoed; a borrowed repository is refused below.
-	if fi, err := os.Stat(gitDir); err != nil || !fi.IsDir() { //nolint:gosec // see above
+	switch fi, err := os.Stat(gitDir); { //nolint:gosec // see above
+	case err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR):
+		return checkout{}, unidentified("its git directory is unreadable", err)
+	case err != nil || !fi.IsDir():
 		return checkout{}, unidentified("its .git file names a missing git directory", nil)
 	}
 	shared, err := os.ReadFile(filepath.Join(gitDir, "commondir")) //nolint:gosec // as above
@@ -181,8 +187,8 @@ func mainCheckout(common string) (string, error) {
 }
 
 // worktrees are the tops of the linked worktrees of co's repository. Each is
-// confirmed by its own pointer: a record alone could name any directory. An
-// unreadable record is an error: a list cut short would pass for complete.
+// confirmed by its own pointer: a record alone could name any directory. A
+// failed read is an error: a list cut short would pass for complete.
 func worktrees(co checkout) ([]string, error) {
 	records := filepath.Join(co.common, "worktrees")
 	entries, err := os.ReadDir(records)
@@ -196,18 +202,41 @@ func worktrees(co checkout) ([]string, error) {
 	for _, e := range entries {
 		record := filepath.Join(records, e.Name())
 		back, err := os.ReadFile(filepath.Join(record, "gitdir")) //nolint:gosec // the repository's own record
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		if gone(err) {
 			continue // a record being pruned names no worktree
 		}
 		if err != nil {
 			return nil, fmt.Errorf("read the repository's worktree record: %w", err)
 		}
 		top := filepath.Dir(absFrom(record, strings.TrimSpace(string(back))))
-		if wt, err := findCheckout(top); err == nil && wt.top == top && wt.linked && sameDir(wt.common, co.common) {
+		wt, err := checkoutAt(top)
+		if idErr, ok := errors.AsType[*IdentityError](err); ok && idErr.Unreadable {
+			return nil, fmt.Errorf("a worktree of this repository cannot be read (%s); fix its permissions or run git worktree prune", idErr.Reason)
+		}
+		// A pointer that is gone, broken or another repository's is no worktree of this one.
+		if err == nil && wt.linked && sameDir(wt.common, co.common) {
 			tops = append(tops, top)
 		}
 	}
 	return tops, nil
+}
+
+// checkoutAt reads the checkout whose top is exactly top; the zero value when
+// top holds no .git entry. Unlike findCheckout it never looks above top.
+func checkoutAt(top string) (checkout, error) {
+	fi, err := os.Stat(filepath.Join(top, ".git")) //nolint:gosec // a recorded worktree, confirmed by readCheckout
+	if gone(err) {
+		return checkout{}, nil
+	}
+	if err != nil {
+		return checkout{}, unidentified("its .git entry is unreadable", err)
+	}
+	return readCheckout(top, fi)
+}
+
+// gone reports a path that is not there, as opposed to one that cannot be read.
+func gone(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
 func absFrom(base, p string) string {

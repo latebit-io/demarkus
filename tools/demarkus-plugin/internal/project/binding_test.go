@@ -242,7 +242,12 @@ func TestBindRefusesAnIncompleteWorktreeList(t *testing.T) {
 	main, wt := layout(t)
 	bindings(t, [2]string{wt, "team"})
 	records := filepath.Join(main, ".git", "worktrees")
-	for name, path := range map[string]string{"the records directory": records, "one record": filepath.Join(records, filepath.Base(wt), "gitdir")} {
+	for name, path := range map[string]string{
+		"the records directory": records,
+		"one record":            filepath.Join(records, filepath.Base(wt), "gitdir"),
+		"a worktree's pointer":  filepath.Join(wt, ".git"),
+		"a worktree's record":   filepath.Join(records, filepath.Base(wt), "commondir"),
+	} {
 		if err := os.Chmod(path, 0o000); err != nil {
 			t.Fatal(err)
 		}
