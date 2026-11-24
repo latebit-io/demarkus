@@ -26,6 +26,7 @@ const (
 	MaxDocuments      = 10000
 	MaxBodyBytes      = 64 << 20
 	MaxLinkConfirms   = 50
+	MaxPinConfirms    = 50 // pin targets the inventory lacks, read by path
 	MaxVersionFetches = 100
 	MaxVersionsPerDoc = 10
 	// MaxShownPerCheck caps one section of the Markdown report; the JSON
@@ -191,7 +192,7 @@ func Run(ctx context.Context, store Store, opts Options) (*Report, error) {
 	a.checkClassifier()
 	a.checkStyleGuide(ctx)
 	a.checkReferences()
-	a.checkDrift()
+	a.checkDrift(ctx)
 	if opts.Deep {
 		a.checkLostMetadata(ctx)
 	}

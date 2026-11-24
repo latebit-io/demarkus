@@ -28,7 +28,7 @@ func Drift(ctx context.Context, store Store, opts Options) (*Report, error) {
 	if err := a.fetchAll(ctx); err != nil {
 		return nil, err
 	}
-	a.checkDrift()
+	a.checkDrift(ctx)
 	return &Report{Scope: a.opts.Scope, Documents: len(a.order), Freshness: a.fresh, Findings: a.findings, Coverage: a.coverage}, nil
 }
 
@@ -44,11 +44,35 @@ func (a *audit) unaudited(docPath string) bool {
 	return !strings.HasPrefix(docPath, a.opts.Scope) || slices.Contains(a.opts.Skip, docPath)
 }
 
+// source is a pin target's document: the inventory's, else one read by path.
+// LIST hides `.well-known/` and what the token may not read, so absence from
+// it proves nothing. Read once per target; nil past the read budget.
+func (a *audit) source(ctx context.Context, target string, read map[string]*document) *document {
+	if d := a.docs[target]; d != nil {
+		return d
+	}
+	if d := read[target]; d != nil {
+		return d
+	}
+	if len(read) >= MaxPinConfirms {
+		return nil
+	}
+	d := &document{path: target, status: "error"}
+	if resp, err := a.store.Fetch(ctx, target); err != nil {
+		a.note("fetch %s failed: %v", target, err)
+	} else {
+		d.status, d.meta = resp.Status, resp.Metadata
+	}
+	read[target] = d
+	return d
+}
+
 // checkDrift compares each pin on a document in this store with its current
 // version: a source past its pin may leave the pinning document stale. Pins
 // on other stores, repositories or the web need a reader this audit lacks.
-func (a *audit) checkDrift() {
-	outside, unread := 0, 0
+func (a *audit) checkDrift(ctx context.Context) {
+	outside, unread, unconfirmed := 0, 0, 0
+	read := map[string]*document{}
 	var behind []int
 	for _, p := range a.order {
 		d := a.docs[p]
@@ -78,13 +102,16 @@ func (a *audit) checkDrift() {
 			if target == "" {
 				continue
 			}
-			source, inventoried := a.docs[target]
-			switch {
-			case !inventoried && a.unaudited(target):
+			if a.unaudited(target) {
 				outside++
-			case inventoried && unjudged(source.status):
+				continue
+			}
+			switch source := a.source(ctx, target, read); {
+			case source == nil:
+				unconfirmed++
+			case unjudged(source.status):
 				unread++
-			case !inventoried || !live(source.status):
+			case !live(source.status):
 				a.fresh.PinsChecked++
 				a.add(CheckDrift, p, "based on "+target+", which is not a live document here", "pin the document that replaced it, or drop the pin")
 			default:
@@ -119,10 +146,18 @@ func (a *audit) checkDrift() {
 		slices.Sort(behind)
 		a.fresh.MedianBehind, a.fresh.MaxBehind = behind[n/2], behind[n-1]
 	}
+	a.noteUnchecked(outside, unread, unconfirmed)
+}
+
+// noteUnchecked reports the pins checkDrift could not judge, by reason.
+func (a *audit) noteUnchecked(outside, unread, unconfirmed int) {
 	if outside > 0 {
 		a.note("%d %s pins on documents outside the scope or skipped not checked for drift", outside, provenance.Key)
 	}
 	if unread > 0 {
 		a.note("%d %s pins on documents that could not be read not checked for drift", unread, provenance.Key)
+	}
+	if unconfirmed > 0 {
+		a.note("pin confirmation budget of %d fetches spent; %d %s pins not checked for drift", MaxPinConfirms, unconfirmed, provenance.Key)
 	}
 }

@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -138,5 +139,57 @@ func TestDriftLeavesAnUnreadSourceUnjudged(t *testing.T) {
 		return strings.HasPrefix(c, "1 rel-based-on pins on documents that could not be read")
 	}) {
 		t.Errorf("pins checked = %d, coverage = %q; want one checked and the unread pin noted", r.Freshness.PinsChecked, r.Coverage)
+	}
+}
+
+// A pin on a document LIST hides is judged by a read of it: `.well-known/`
+// is live but never inventoried. One read serves every document pinning it.
+func TestDriftReadsSourcesTheInventoryLacks(t *testing.T) {
+	const template, down = "/.well-known/demarkus/template.md", "/.well-known/demarkus/down.md"
+	f := newFake(map[string]fakeDoc{
+		"/index.md": {Body: "# Hub\n\n- [a](/a.md)\n- [b](/b.md)\n- [c](/c.md)\n", Meta: map[string]string{"tags": "hub"}},
+		template:    {Body: "# T\n\nSummary of T.\n", Meta: map[string]string{"tags": "template", "version": "10"}},
+		"/a.md":     {Body: "# A\n\nSummary of A.\n", Meta: map[string]string{"tags": "a", "rel-based-on": "mark://kb" + template + "/v10"}},
+		"/b.md":     {Body: "# B\n\nSummary of B.\n", Meta: map[string]string{"tags": "b", "rel-based-on": template + "/v8"}},
+		"/c.md":     {Body: "# C\n\nSummary of C.\n", Meta: map[string]string{"tags": "c", "rel-based-on": down + "/v1"}},
+	})
+	f.host = "kb"
+	f.missing[down] = protocol.StatusServerError
+	r, err := Drift(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckDrift); len(got) != 1 || got[0] != "/b.md: based on "+template+", which is at v10, past the pinned v8" {
+		t.Errorf("drift findings = %q, want only the pin the template moved past", got)
+	}
+	if r.Freshness.PinsChecked != 2 || f.fetched[template] != 1 {
+		t.Errorf("pins checked = %d, template read %d times; want both template pins checked on one read", r.Freshness.PinsChecked, f.fetched[template])
+	}
+	// A hidden source that cannot be read is unknown, as an inventoried one is.
+	if !slices.ContainsFunc(r.Coverage, func(c string) bool {
+		return strings.HasPrefix(c, "1 rel-based-on pins on documents that could not be read")
+	}) {
+		t.Errorf("coverage = %q, want the unread pin noted", r.Coverage)
+	}
+}
+
+func TestPinConfirmationBudget(t *testing.T) {
+	pins := make([]string, MaxPinConfirms+3)
+	for i := range pins {
+		pins[i] = fmt.Sprintf("/gone-%d.md/v1", i)
+	}
+	f := newFake(map[string]fakeDoc{
+		"/index.md": {Body: "# Hub\n\n- [a](/a.md)\n", Meta: map[string]string{"tags": "hub"}},
+		"/a.md":     {Body: "# A\n\nSummary of A.\n", Meta: map[string]string{"tags": "a", "rel-based-on": strings.Join(pins, ", ")}},
+	})
+	r, err := Drift(context.Background(), f, Options{Scope: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findings(r, CheckDrift); len(got) != MaxPinConfirms || r.Freshness.PinsChecked != MaxPinConfirms {
+		t.Fatalf("confirmed %d pins, %d checked; want %d", len(got), r.Freshness.PinsChecked, MaxPinConfirms)
+	}
+	if len(r.Coverage) != 1 || !strings.Contains(r.Coverage[0], "3 rel-based-on pins not checked for drift") {
+		t.Fatalf("pins past the budget are a coverage gap, not findings: %v", r.Coverage)
 	}
 }
